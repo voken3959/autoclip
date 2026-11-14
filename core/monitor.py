@@ -1,3 +1,4 @@
+
 import os
 import time
 from collections import deque
@@ -29,18 +30,28 @@ class Monitor:
         self.cooldown_seconds = env_int("CLIP_COOLDOWN_SECONDS", 90)
 
         self.started_at = time.monotonic()
-        self.second_counts = deque(maxlen=max(self.window_seconds, self.calibration_seconds) + 5)
+        self.second_counts = deque(
+            maxlen=max(self.window_seconds, self.calibration_seconds) + 5
+        )
+
         self.current_second = int(time.monotonic())
         self.current_count = 0
         self.total_messages = 0
         self.total_chatters = set()
+
         self.baseline = None
         self.last_baseline_update = 0.0
         self.above_threshold_streak = 0
         self.last_detection_at = 0.0
+
         self.last_event = None
         self.events = deque(maxlen=30)
         self.clips = deque(maxlen=30)
+
+        # Live chat storage
+        self.chat_messages = deque(maxlen=100)
+        self.chat_message_id = 0
+
         self.last_message_at = None
         self.connection_status = "connecting"
         self.last_error = None
@@ -52,6 +63,7 @@ class Monitor:
 
     def _roll_second(self):
         now_second = int(time.monotonic())
+
         while self.current_second < now_second:
             self.second_counts.append(self.current_count)
             self.last_rate = float(self.current_count)
@@ -63,31 +75,52 @@ class Monitor:
         return sum(values) / len(values) if values else 0.0
 
     def _update_baseline(self, now: float):
-        if self.baseline is None or now - self.last_baseline_update >= self.update_seconds:
+        if (
+            self.baseline is None
+            or now - self.last_baseline_update >= self.update_seconds
+        ):
             values = list(self.second_counts)[-self.window_seconds:]
+
             if self.baseline is None:
                 clean = values
             else:
-                # Exclude large outliers so an exciting moment does not inflate
-                # the definition of normal chat activity.
                 cap = max(self.baseline * 1.8, self.baseline + 2.0)
                 clean = [value for value in values if value <= cap]
+
             if clean:
                 self.baseline = sum(clean) / len(clean)
+
             self.last_baseline_update = now
 
     def add_message(self, message: dict):
         self.current_count += 1
         self.total_messages += 1
+
         username = message.get("username", "viewer")
+        display_name = message.get("display_name", username)
+        message_text = message.get("text", "")
+
         self.total_chatters.add(username.lower())
         self.last_message_at = datetime.now(timezone.utc).isoformat()
 
+        self.chat_message_id += 1
+
+        self.chat_messages.append({
+            "id": self.chat_message_id,
+            "username": username,
+            "display_name": display_name,
+            "text": message_text,
+            "time": self.last_message_at
+        })
+
     def tick(self):
-        """Run exactly once per dashboard second; detection streaks are seconds, not messages."""
+        """Run once per dashboard second."""
         now = time.monotonic()
+
         self._roll_second()
+
         elapsed = now - self.started_at
+
         if elapsed < self.calibration_seconds:
             return None
 
@@ -95,11 +128,15 @@ class Monitor:
             self.baseline = self._calibration_average()
             self.last_baseline_update = now
 
-        # Evaluate a five-second moving rate, once per second.
         recent = list(self.second_counts)[-5:]
         recent_rate = sum(recent) / max(1, len(recent))
+
         baseline = max(self.baseline or 0.0, 0.5)
-        threshold = max(baseline * self.multiplier_threshold, baseline + self.min_extra)
+
+        threshold = max(
+            baseline * self.multiplier_threshold,
+            baseline + self.min_extra
+        )
 
         if recent_rate >= threshold:
             self.above_threshold_streak += 1
@@ -107,26 +144,31 @@ class Monitor:
             self.above_threshold_streak = 0
 
         event = None
+
         if (
             self.above_threshold_streak >= self.confirm_seconds
             and now - self.last_detection_at >= self.cooldown_seconds
         ):
             multiplier = recent_rate / baseline
+
             event = {
                 "time": datetime.now(timezone.utc).isoformat(),
                 "rate": round(recent_rate, 2),
                 "baseline": round(baseline, 2),
                 "multiplier": round(multiplier, 2),
-                "score": min(100, round((multiplier / self.multiplier_threshold) * 60)),
+                "score": min(
+                    100,
+                    round((multiplier / self.multiplier_threshold) * 60)
+                )
             }
+
             self.events.appendleft(event)
             self.last_event = event
             self.last_detection_at = now
             self.above_threshold_streak = 0
 
-        # Update only after evaluating this second. The outlier filter protects
-        # the rolling average from the spike that may have just been detected.
         self._update_baseline(now)
+
         return event
 
     def add_clip(self, clip: dict):
@@ -134,22 +176,40 @@ class Monitor:
 
     def snapshot(self):
         self._roll_second()
+
         elapsed = time.monotonic() - self.started_at
         calibrating = elapsed < self.calibration_seconds
+
         if calibrating:
-            progress = min(100, round(elapsed / self.calibration_seconds * 100))
+            progress = min(
+                100,
+                round(elapsed / self.calibration_seconds * 100)
+            )
             phase = "calibrating"
         else:
             progress = 100
             phase = "monitoring"
+
         baseline = self.baseline
-        current_rate = self.last_rate if int(time.monotonic()) != self.current_second else self.current_count
+
+        current_rate = (
+            self.last_rate
+            if int(time.monotonic()) != self.current_second
+            else self.current_count
+        )
+
         if baseline and baseline > 0:
             multiplier = current_rate / baseline
-            score = min(100, round((multiplier / max(self.multiplier_threshold, 0.1)) * 60))
+            score = min(
+                100,
+                round(
+                    (multiplier / max(self.multiplier_threshold, 0.1)) * 60
+                )
+            )
         else:
             multiplier = 0
             score = 0
+
         return {
             "channel": os.getenv("TWITCH_CHANNEL", "jynxzi"),
             "connection": self.connection_status,
@@ -168,5 +228,11 @@ class Monitor:
             "last_event": self.last_event,
             "events": list(self.events),
             "clips": list(self.clips),
-            "auto_clip_enabled": os.getenv("AUTO_CLIP_ENABLED", "false").lower() == "true",
+
+            # New live chat data
+            "chat_messages": list(self.chat_messages),
+
+            "auto_clip_enabled": (
+                os.getenv("AUTO_CLIP_ENABLED", "false").lower() == "true"
+            )
         }
