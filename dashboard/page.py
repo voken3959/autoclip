@@ -256,6 +256,24 @@ canvas {
     margin: 0 2px;
 }
 
+/* Zero-width 7TV emotes are drawn on top of the emote before them. */
+.emote-stack {
+    position: relative;
+    display: inline-block;
+    vertical-align: middle;
+    line-height: 0;
+}
+
+.emote-stack .seventv-emote.zw {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
+    max-width: none;
+    pointer-events: none;
+}
+
 .emote-status {
     color: var(--muted);
     font-size: 11px;
@@ -454,7 +472,13 @@ let activityHistory = [];
 let lastTotalMessages = null;
 let lastChatId = null;
 
-let sevenTVEmotes = {};
+let sevenTVEmotes = new Map();
+let emotesVersion = null;
+let emoteRequestInFlight = false;
+let emoteRetryAt = 0;
+let lastRenderedChatId = null;
+
+const CHAT_LIMIT = 100; // matches the backend's chat buffer
 
 const MAX_POINTS = 90;
 
@@ -599,34 +623,84 @@ function drawGraph() {
 // ------------------------------
 
 async function loadSevenTVEmotes() {
+    if (emoteRequestInFlight) return;
+    emoteRequestInFlight = true;
+
     try {
         const response = await fetch(
-            BACKEND_URL + "/api/emotes"
+            BACKEND_URL + "/api/emotes",
+            { cache: "no-store" }
         );
 
         if (!response.ok) {
             throw new Error("HTTP " + response.status);
         }
 
-        sevenTVEmotes = await response.json();
+        const data = await response.json();
 
-        const count = Object.keys(sevenTVEmotes).length;
+        // A Map avoids clashes with built-in property names like "constructor".
+        sevenTVEmotes = new Map(Object.entries(data.emotes || {}));
+        emotesVersion = data.version;
+        emoteRetryAt = 0;
 
-        $("emotecount").textContent = count + " 7TV emotes";
+        const counts = data.counts || { global: 0, channel: 0 };
 
-        $("emotestatus").textContent =
-            count > 0
-            ? "7TV emotes loaded"
-            : "No 7TV emotes were returned by the backend.";
+        $("emotecount").textContent =
+            sevenTVEmotes.size + " 7TV emotes";
 
-        renderChat(window.latestChat || []);
+        if (data.status === "ready") {
+            $("emotestatus").textContent = data.channel_found
+                ? `7TV emotes loaded: ${counts.channel} channel, ${counts.global} global`
+                : `No 7TV emote set found for this channel; showing ${counts.global} global emotes`;
+        } else if (data.status === "waiting_for_channel") {
+            $("emotestatus").textContent =
+                "Global 7TV emotes loaded; waiting for Twitch chat to identify the channel...";
+        } else if (data.status === "error") {
+            $("emotestatus").textContent =
+                "The server could not reach 7TV; retrying...";
+        } else {
+            $("emotestatus").textContent = "Loading 7TV emotes...";
+        }
+
+        // Re-draw existing messages so they pick up the emotes.
+        renderChat(window.latestChat || [], true);
 
     } catch (error) {
         console.error("7TV loading error:", error);
 
         $("emotestatus").textContent =
-            "Could not load 7TV emotes.";
+            "Could not load 7TV emotes; retrying...";
+
+        emoteRetryAt = Date.now() + 10000;
+
+    } finally {
+        emoteRequestInFlight = false;
     }
+}
+
+// The backend bumps emotes_version whenever its emote list changes.
+function syncEmotes(version) {
+    if (version === undefined || version === emotesVersion) return;
+    if (emoteRequestInFlight || Date.now() < emoteRetryAt) return;
+    loadSevenTVEmotes();
+}
+
+function makeEmoteImage(token, emote, isOverlay) {
+    const img = document.createElement("img");
+
+    img.className = "seventv-emote" + (isOverlay ? " zw" : "");
+    img.src = emote.url;
+    img.alt = token;
+    img.title = token + (emote.scope === "channel" ? " (channel 7TV emote)" : " (global 7TV emote)");
+    img.decoding = "async";
+    img.draggable = false;
+
+    img.onerror = () => {
+        if (isOverlay) img.remove();
+        else img.replaceWith(document.createTextNode(token));
+    };
+
+    return img;
 }
 
 // ------------------------------
@@ -634,93 +708,130 @@ async function loadSevenTVEmotes() {
 // ------------------------------
 
 function renderMessageContent(container, message) {
-    // Match emote-like tokens while preserving punctuation and spaces.
-    const parts = message.split(/([A-Za-z0-9_]+)/g);
+    // Twitch splits chat into words on whitespace, and emote names must match
+    // a whole word exactly (case-sensitive).
+    let lastEmote = null;
 
-    for (const part of parts) {
-        if (!part) continue;
+    for (const token of message.split(/(\s+)/)) {
+        if (!token) continue;
 
-        const emote = sevenTVEmotes[part];
-
-        if (emote && emote.url) {
-            const img = document.createElement("img");
-
-            img.className = "seventv-emote";
-            img.src = emote.url;
-            img.alt = part;
-            img.title = part;
-            img.loading = "lazy";
-
-            img.onerror = () => {
-                img.replaceWith(document.createTextNode(part));
-            };
-
-            container.appendChild(img);
-
-        } else {
-            container.appendChild(
-                document.createTextNode(part)
-            );
+        if (/^\s+$/.test(token)) {
+            container.appendChild(document.createTextNode(token));
+            continue;
         }
+
+        const emote = sevenTVEmotes.get(token);
+
+        if (!emote || !emote.url) {
+            container.appendChild(document.createTextNode(token));
+            lastEmote = null;
+            continue;
+        }
+
+        // Zero-width emotes are drawn on top of the emote before them.
+        if (emote.zero_width && lastEmote && lastEmote.parentElement) {
+            let stack = lastEmote.parentElement;
+
+            if (!stack.classList.contains("emote-stack")) {
+                stack = document.createElement("span");
+                stack.className = "emote-stack";
+                lastEmote.replaceWith(stack);
+                stack.appendChild(lastEmote);
+            }
+
+            stack.appendChild(makeEmoteImage(token, emote, true));
+            continue;
+        }
+
+        const img = makeEmoteImage(token, emote, false);
+        container.appendChild(img);
+        lastEmote = img;
     }
 }
 
-function renderChat(messages) {
+function buildChatRow(message) {
+    const row = document.createElement("div");
+    row.className = "chat-message";
+
+    const username = document.createElement("span");
+    username.className = "chat-user";
+    username.textContent =
+        message.display_name || message.username || "Unknown";
+
+    username.style.color = usernameColor(
+        message.username || ""
+    );
+
+    const content = document.createElement("span");
+    content.className = "chat-content";
+
+    renderMessageContent(
+        content,
+        String(message.text || "").replace(/\r?\n/g, "")
+    );
+
+    row.appendChild(username);
+    row.appendChild(content);
+
+    return row;
+}
+
+// New messages are appended to the list instead of rebuilding it, so
+// animated emotes already on screen keep playing instead of restarting
+// every second. A full rebuild only happens when the emote list changes.
+function renderChat(messages, forceRebuild = false) {
     window.latestChat = messages || [];
 
     const container = $("chat");
     const items = window.latestChat;
 
     if (!items.length) {
-        container.innerHTML =
-            '<div class="empty">Waiting for Twitch messages...</div>';
+        if (lastRenderedChatId !== null || !container.firstElementChild) {
+            container.innerHTML =
+                '<div class="empty">Waiting for Twitch messages...</div>';
+        }
+        lastRenderedChatId = null;
         return;
     }
 
-    // Only rebuild when a new message arrives or the list changes.
-    const newestId = items.length
-        ? items[items.length - 1].id
-        : null;
+    const firstRender = lastRenderedChatId === null;
+    const newestId = items[items.length - 1].id;
 
-    if (
-        container.dataset.lastId === String(newestId) &&
-        container.children.length === items.length
-    ) {
-        return;
+    // A lower ID than before means the server restarted.
+    const rebuild =
+        forceRebuild || firstRender || newestId < lastRenderedChatId;
+
+    if (!rebuild && newestId === lastRenderedChatId) return;
+
+    const stickToBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    const previousScroll = container.scrollTop;
+
+    if (rebuild) {
+        container.replaceChildren();
+
+        for (const message of items) {
+            container.appendChild(buildChatRow(message));
+        }
+    } else {
+        for (const message of items) {
+            if (message.id > lastRenderedChatId) {
+                container.appendChild(buildChatRow(message));
+            }
+        }
+
+        while (container.children.length > CHAT_LIMIT) {
+            container.firstElementChild.remove();
+        }
     }
 
-    container.dataset.lastId = String(newestId);
+    lastRenderedChatId = newestId;
 
-    container.replaceChildren();
-
-    for (const message of items) {
-        const row = document.createElement("div");
-        row.className = "chat-message";
-
-        const username = document.createElement("span");
-        username.className = "chat-user";
-        username.textContent =
-            message.display_name || message.username || "Unknown";
-
-        username.style.color = usernameColor(
-            message.username || ""
-        );
-
-        const content = document.createElement("span");
-        content.className = "chat-content";
-
-        renderMessageContent(
-            content,
-            String(message.text || "").replace(/\r?\n/g, "")
-        );
-
-        row.appendChild(username);
-        row.appendChild(content);
-
-        container.appendChild(row);
-    }
-
-    container.scrollTop = container.scrollHeight;
+    // Follow new messages, unless the user has scrolled up to read.
+    container.scrollTop =
+        firstRender || stickToBottom
+            ? container.scrollHeight
+            : previousScroll;
 }
 
 function usernameColor(username) {
@@ -805,6 +916,9 @@ function render(s) {
 
     // Add a graph point for this actual backend update.
     addGraphPoint(s);
+
+    // Reload 7TV emotes if the backend's emote list changed.
+    syncEmotes(s.emotes_version);
 
     // Chat
     renderChat(s.chat_messages || []);
