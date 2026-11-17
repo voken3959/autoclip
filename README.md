@@ -127,7 +127,16 @@ chat contribution = unique people who sent a message in the last 5 minutes
 Streams that have not been collected chat from yet show a dash; the average
 contribution is the mean across the streams that do have data.
 
-## 6. VPS deployment
+## 6. Chat badges
+
+Usernames in the dashboard chat show Twitch badges (broadcaster, moderator,
+VIP, subscriber, bits and channel-specific badges). The `badges` tag on each
+IRC message is resolved to badge images with the Helix chat-badges APIs, using
+the same `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` as clipping and the
+leaderboard; the watched channel's own badges take priority once its ID is
+known. Without the client keys, a static set of common badges is still shown.
+
+## 7. VPS deployment
 
 Do not expose this prototype directly to the public internet yet. Before VPS deployment,
 add HTTPS, a login system, secure secret storage, reverse-proxy configuration, and

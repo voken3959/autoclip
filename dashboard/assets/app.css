@@ -575,6 +575,21 @@ button.chip:hover { filter: brightness(1.25); }
 .chat-user::after { content: ""; }
 .chat-content { color: #dcd9fb; }
 
+/* Twitch badges next to the username */
+.chat-badges {
+    display: inline-flex;
+    gap: 3px;
+    vertical-align: middle;
+    margin-right: 6px;
+    line-height: 1;
+}
+.chat-badge {
+    height: 15px;
+    width: auto;
+    display: block;
+    user-select: none;
+}
+
 .seventv-emote {
     height: 28px;
     width: auto;

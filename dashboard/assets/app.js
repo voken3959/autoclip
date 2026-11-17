@@ -860,10 +860,25 @@ function buildChatRow(message) {
     const user = el("span", "chat-user", message.display_name || message.username || "Unknown");
     user.style.color = usernameColor(message.username || "");
 
+    const badges = el("span", "chat-badges");
+    for (const badge of message.badges || []) {
+        if (!badge || !badge.url) continue;
+        const img = document.createElement("img");
+        img.className = "chat-badge";
+        img.src = badge.url;
+        img.alt = badge.title || badge.type || "badge";
+        img.title = badge.title || badge.type || "badge";
+        img.decoding = "async";
+        img.draggable = false;
+        img.onerror = () => img.remove();
+        badges.appendChild(img);
+    }
+
     const content = el("span", "chat-content");
     renderMessageContent(content, String(message.text || "").replace(/\r?\n/g, ""));
 
-    row.append(user, content);
+    if (badges.children.length) row.append(user, badges, content);
+    else row.append(user, content);
     return row;
 }
 

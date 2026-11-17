@@ -21,6 +21,7 @@ from core.twitch_auth import AuthError, TwitchAuth
 from core.clip_manager import ClipError, ClipManager
 from core.emotes import SevenTVEmotes
 from core.leaderboard import LeaderboardCollector
+from core.badges import BadgeStore
 from dashboard.page import PAGE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -40,12 +41,30 @@ clip_manager = ClipManager(
     get_broadcaster_id=lambda: os.getenv("TWITCH_BROADCASTER_ID", "").strip() or emotes.channel_id,
     channel=CHANNEL,
 )
+# Twitch badges shown next to usernames in the dashboard chat. The badge
+# images come from the Helix chat-badges APIs (same client keys as the
+# leaderboard); the watched channel's ID feeds the channel-badge lookup.
+badges = BadgeStore(
+    client_id=os.getenv("TWITCH_CLIENT_ID", "").strip(),
+    client_secret=os.getenv("TWITCH_CLIENT_SECRET", "").strip(),
+    get_channel_id=lambda: emotes.channel_id,
+)
+badges.set_channel_id(os.getenv("TWITCH_BROADCASTER_ID", "").strip())
+monitor.badges_resolver = badges.resolve
+
+
+def note_room_id(room_id: str) -> None:
+    """The channel's ID arrives from Twitch chat: feed it to emotes and badges."""
+    emotes.set_channel_id(room_id)
+    badges.set_channel_id(room_id)
+
+
 chat_client = TwitchChatClient(
     username=os.getenv("TWITCH_USERNAME", "").strip(),
     token=os.getenv("TWITCH_OAUTH_TOKEN", "").strip(),
     channel=CHANNEL,
     monitor=monitor,
-    on_room_id=emotes.set_channel_id,
+    on_room_id=note_room_id,
 )
 # Collects chat from the top live streams so the Chat Contribution page can
 # show a real participation number for each of them.
@@ -172,6 +191,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(emotes.run()))
     tasks.append(asyncio.create_task(auth.run(clip_manager.http)))
     tasks.append(asyncio.create_task(leaderboard.run()))
+    tasks.append(asyncio.create_task(badges.run()))
     if chat_client.ready:
         tasks.append(asyncio.create_task(chat_client.run()))
     else:
@@ -182,6 +202,7 @@ async def lifespan(app: FastAPI):
     tasks.clear()
     await chat_client.close()
     await leaderboard.aclose()
+    await badges.aclose()
     await clip_manager.aclose()
 
 

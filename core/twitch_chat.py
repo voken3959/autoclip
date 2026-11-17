@@ -94,6 +94,7 @@ class TwitchChatClient:
             "text": text,
             "display_name": tags.get("display-name", username),
             "emotes": tags.get("emotes", ""),
+            "badges": tags.get("badges", ""),
             "room_id": tags.get("room-id", ""),
         }
 
