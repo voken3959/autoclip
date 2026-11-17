@@ -22,6 +22,10 @@ from core.clip_manager import ClipError, ClipManager
 from core.emotes import SevenTVEmotes
 from dashboard.page import PAGE
 
+@app.route('/ping')
+def ping():
+    return 'OK', 200
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("autoclip")
 
