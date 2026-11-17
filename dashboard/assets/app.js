@@ -954,6 +954,14 @@ function renderChat(messages, forceRebuild) {
     updateJump();
 }
 
+// One message pushed by the server the moment it was sent.
+function addChatMessage(message) {
+    if (!message) return;
+    const last = latestChat.length ? latestChat[latestChat.length - 1].id : 0;
+    if (message.id <= last) return; // already shown
+    renderChat(latestChat.concat(message).slice(-CHAT_LIMIT), false);
+}
+
 // -------------------------------------------------------------- clip list
 
 const clipRows = new Map();
@@ -1627,7 +1635,9 @@ function render(s) {
         S.seenEvent = newestId;
     }
 
-    renderChat(s.chat_messages || [], false);
+    // Chat normally arrives on its own as it is sent; a full list only comes
+    // with the first load or a poll.
+    if (s.chat_messages) renderChat(s.chat_messages, false);
     syncEmotes(s.emotes_version);
 
     watchClips(s.clips || []);
@@ -1691,7 +1701,9 @@ function connect() {
     };
     socket.onmessage = event => {
         try {
-            render(JSON.parse(event.data));
+            const data = JSON.parse(event.data);
+            if (data.type === "chat") addChatMessage(data.message);
+            else render(data);
         } catch (error) {
             console.error("Dashboard data error:", error);
         }
