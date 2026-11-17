@@ -54,6 +54,8 @@ class Monitor:
         self.chat_message_id = 0
         # Called with each new chat message the moment it arrives.
         self.on_chat = None
+        # Optional: badges tag (str) -> list of badge dicts, set by main.
+        self.badges_resolver = None
 
         self.last_message_at = None
         self.connection_status = "connecting"
@@ -113,8 +115,17 @@ class Monitor:
             "username": username,
             "display_name": display_name,
             "text": message_text,
-            "time": self.last_message_at
+            "time": self.last_message_at,
+            "badges": [],
         }
+
+        badges_tag = message.get("badges", "")
+        if badges_tag and self.badges_resolver:
+            try:
+                entry["badges"] = self.badges_resolver(badges_tag) or []
+            except Exception:
+                pass  # badges are cosmetic; never let them break chat
+
         self.chat_messages.append(entry)
 
         if self.on_chat:
