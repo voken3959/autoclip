@@ -52,6 +52,8 @@ class Monitor:
         # Live chat storage
         self.chat_messages = deque(maxlen=100)
         self.chat_message_id = 0
+        # Called with each new chat message the moment it arrives.
+        self.on_chat = None
 
         self.last_message_at = None
         self.connection_status = "connecting"
@@ -106,13 +108,20 @@ class Monitor:
 
         self.chat_message_id += 1
 
-        self.chat_messages.append({
+        entry = {
             "id": self.chat_message_id,
             "username": username,
             "display_name": display_name,
             "text": message_text,
             "time": self.last_message_at
-        })
+        }
+        self.chat_messages.append(entry)
+
+        if self.on_chat:
+            try:
+                self.on_chat(entry)
+            except Exception:
+                pass  # a broken listener must never stop chat from being counted
 
     def tick(self):
         """Run once per dashboard second."""
@@ -216,7 +225,7 @@ class Monitor:
             data["ago"] = None
         return data
 
-    def snapshot(self):
+    def snapshot(self, include_chat: bool = True):
         self._roll_second()
 
         elapsed = time.monotonic() - self.started_at
@@ -257,7 +266,7 @@ class Monitor:
 
         now = datetime.now(timezone.utc)
 
-        return {
+        data = {
             "channel": os.getenv("TWITCH_CHANNEL", "jynxzi"),
             "connection": self.connection_status,
             "error": self.last_error,
@@ -285,6 +294,11 @@ class Monitor:
             "history": list(self.second_counts)[-120:],
             "tick": self.current_second,
             "server_time": now.timestamp(),
-
-            "chat_messages": list(self.chat_messages),
         }
+
+        # The per-second graph updates leave chat out: messages are pushed on
+        # their own as they arrive (see `on_chat`).
+        if include_chat:
+            data["chat_messages"] = list(self.chat_messages)
+
+        return data
