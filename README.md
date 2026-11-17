@@ -66,19 +66,30 @@ your Twitch account's connections/developer settings and generate a new one.
 - Detected spikes are excluded from baseline updates to reduce baseline inflation.
 - A 90-second cooldown prevents repeated detections for one burst.
 
-## 4. Enable clip creation later
+## 4. Clipping
 
-Do not enable this until chat monitoring and detection have been tested.
+Clipping is set up from the dashboard, not by pasting tokens into `.env`.
 
-1. Create/register a Twitch developer application and obtain its Client ID.
-2. Authorise a Twitch USER token with both `chat:read` and `clips:edit`.
-3. Find Jynxzi's broadcaster ID (we can add automatic lookup in the next iteration).
-4. Set `TWITCH_CLIENT_ID`, `TWITCH_CLIP_TOKEN`, and `TWITCH_BROADCASTER_ID` in `.env`.
-5. Set `AUTO_CLIP_ENABLED=true` and restart.
+1. In the [Twitch developer console](https://dev.twitch.tv/console/apps) register an
+   application with client type **Confidential**.
+2. Add this OAuth redirect URL (use your own address if it is not the hosted one):
+   `https://autoclip-oz6y.onrender.com/auth/twitch/callback`
+   (locally: `http://127.0.0.1:8000/auth/twitch/callback`).
+3. Set `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` and `ADMIN_KEY` (a long random
+   text) on the server, then restart or redeploy. On a local machine the admin key
+   is optional.
+4. Open the dashboard, press **Set up clipping** and choose **Connect Twitch**. Approve
+   the `clips:edit` permission with the account that should make the clips.
+5. Press **Clip now** to test it, or turn on **Auto-clip** to save a clip on every spike.
 
-The API returns an edit URL. Twitch clip creation is asynchronous, and the broadcaster
-may have disabled clipping or restricted who can clip. A successful API request is
-not the same as a published clip; review the returned edit URL.
+Tokens refresh themselves. Hosts that wipe their disk on restart (Render's free
+plan does) lose the saved login, so open the setup screen after connecting, press
+**Copy refresh token** and save it as `TWITCH_CLIP_REFRESH_TOKEN` in the host's
+settings.
+
+Each clip goes through Starting, Saving, then Ready (or Failed with the reason).
+Twitch only makes clips while the channel is live, and the streamer's clip
+restrictions apply. A clip is only listed as Ready once Twitch has really published it.
 
 ## 5. VPS deployment
 

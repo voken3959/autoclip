@@ -45,6 +45,7 @@ class Monitor:
         self.last_detection_at = 0.0
 
         self.last_event = None
+        self.event_id = 0
         self.events = deque(maxlen=30)
         self.clips = deque(maxlen=30)
 
@@ -151,7 +152,10 @@ class Monitor:
         ):
             multiplier = recent_rate / baseline
 
+            self.event_id += 1
+
             event = {
+                "id": self.event_id,
                 "time": datetime.now(timezone.utc).isoformat(),
                 "rate": round(recent_rate, 2),
                 "baseline": round(baseline, 2),
@@ -174,6 +178,28 @@ class Monitor:
     def add_clip(self, clip: dict):
         self.clips.appendleft(clip)
 
+    def threshold_for(self, baseline: float) -> float:
+        """The rate chat has to stay above to count as a spike (same maths as tick)."""
+        baseline = max(baseline, 0.5)
+        return max(baseline * self.multiplier_threshold, baseline + self.min_extra)
+
+    def _avg_recent(self, seconds: int) -> float:
+        recent = list(self.second_counts)[-seconds:]
+        if not recent:
+            return float(self.current_count)
+        return sum(recent) / len(recent)
+
+    @staticmethod
+    def _with_age(item: dict, now: datetime) -> dict:
+        """Copy of an event/clip record plus how many seconds ago it happened."""
+        data = dict(item)
+        try:
+            then = datetime.fromisoformat(item["time"])
+            data["ago"] = max(0.0, round((now - then).total_seconds(), 1))
+        except (KeyError, TypeError, ValueError):
+            data["ago"] = None
+        return data
+
     def snapshot(self):
         self._roll_second()
 
@@ -192,14 +218,16 @@ class Monitor:
 
         baseline = self.baseline
 
-        current_rate = (
-            self.last_rate
-            if int(time.monotonic()) != self.current_second
-            else self.current_count
-        )
+        # Smoothed over the last few *completed* seconds, so the number does
+        # not jump around depending on where in the second we sample it.
+        rate = self._avg_recent(3)
+        # What spike detection itself compares against the baseline.
+        detect_rate = self._avg_recent(5)
 
-        if baseline and baseline > 0:
-            multiplier = current_rate / baseline
+        if baseline is not None:
+            floor = max(baseline, 0.5)
+            multiplier = detect_rate / floor
+            threshold = self.threshold_for(baseline)
             score = min(
                 100,
                 round(
@@ -208,7 +236,10 @@ class Monitor:
             )
         else:
             multiplier = 0
+            threshold = None
             score = 0
+
+        now = datetime.now(timezone.utc)
 
         return {
             "channel": os.getenv("TWITCH_CHANNEL", "jynxzi"),
@@ -218,21 +249,26 @@ class Monitor:
             "calibration_progress": progress,
             "calibration_elapsed": int(elapsed),
             "calibration_total": self.calibration_seconds,
-            "messages_per_second": current_rate,
+            "messages_per_second": round(rate, 2),
+            "recent_rate": round(detect_rate, 2),
             "baseline": round(baseline, 2) if baseline is not None else None,
+            "threshold": round(threshold, 2) if threshold is not None else None,
+            "spike_multiplier": self.multiplier_threshold,
             "multiplier": round(multiplier, 2),
             "hype_score": score,
             "total_messages": self.total_messages,
             "unique_chatters": len(self.total_chatters),
             "last_message_at": self.last_message_at,
             "last_event": self.last_event,
-            "events": list(self.events),
-            "clips": list(self.clips),
+            "events": [self._with_age(e, now) for e in self.events],
+            "clips": [self._with_age(c, now) for c in self.clips],
 
-            # New live chat data
+            # Completed per-second message counts, oldest first, for the chart.
+            # `tick` is the current second's number, so the chart can tell
+            # exactly how far to slide between two updates.
+            "history": list(self.second_counts)[-120:],
+            "tick": self.current_second,
+            "server_time": now.timestamp(),
+
             "chat_messages": list(self.chat_messages),
-
-            "auto_clip_enabled": (
-                os.getenv("AUTO_CLIP_ENABLED", "false").lower() == "true"
-            )
         }
