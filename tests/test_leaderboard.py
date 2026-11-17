@@ -80,11 +80,13 @@ def test_snapshot_computes_contribution():
         },
     ]
 
-    # Fake an active IRC connection for the first stream.
+    # Fake an active IRC connection for the first stream, joined long enough
+    # to be measured.
     class FakeConn:
         channels = ["big"]
 
     collector._connections.append(FakeConn())
+    collector.note_joined(["big"], time.monotonic() - 120)
 
     now = time.monotonic()
     collector.note_message("big", "alice", at=now)
@@ -112,12 +114,70 @@ def test_snapshot_computes_contribution():
     assert collector2.snapshot()["average_contribution"] is None
 
 
+def test_snapshot_orders_by_contribution():
+    collector = make_collector()
+    collector.streams = [
+        {"login": "a", "name": "A", "game": "", "viewers": 100, "thumbnail": "", "url": ""},
+        {"login": "b", "name": "B", "game": "", "viewers": 900, "thumbnail": "", "url": ""},
+        {"login": "c", "name": "C", "game": "", "viewers": 10, "thumbnail": "", "url": ""},
+        {"login": "d", "name": "D", "game": "", "viewers": 5, "thumbnail": "", "url": ""},
+    ]
+
+    class FakeConn:
+        channels = ["a", "b", "c", "d"]
+
+    collector._connections.append(FakeConn())
+    now = time.monotonic()
+    collector.note_joined(["a", "b", "c", "d"], now - 120)
+
+    # a: 10/100 = 10%, b: 3/900 = 0.33%, c: 2/10 = 20%, d: not measured.
+    for i in range(10):
+        collector.note_message("a", f"x{i}", at=now)
+    collector.note_message("b", "y1", at=now)
+    collector.note_message("b", "y2", at=now)
+    collector.note_message("b", "y3", at=now)
+    collector.note_message("c", "z1", at=now)
+    collector.note_message("c", "z2", at=now)
+    # d is joined and has been sampled long enough: its real contribution is 0%.
+
+    streams = collector.snapshot()["streams"]
+    assert [s["login"] for s in streams] == ["c", "a", "b", "d"]
+    assert [s["contribution"] for s in streams] == [20.0, 10.0, 0.33, 0.0]
+
+
+def test_min_sample_shows_dash_until_measured():
+    collector = make_collector()
+    collector.streams = [
+        {"login": "new", "name": "New", "game": "", "viewers": 100, "thumbnail": "", "url": ""},
+        {"login": "talked", "name": "Talked", "game": "", "viewers": 100, "thumbnail": "", "url": ""},
+    ]
+
+    class FakeConn:
+        channels = ["new", "talked"]
+
+    collector._connections.append(FakeConn())
+    # Both joined just now (no elapsed sample time).
+    collector.note_joined(["new", "talked"], time.monotonic())
+
+    collector.note_message("talked", "alice", at=time.monotonic())
+
+    by_login = {s["login"]: s for s in collector.snapshot()["streams"]}
+    # "new" has no messages and has not been sampled: dash, not a false 0.
+    assert by_login["new"]["chatters"] is None
+    assert by_login["new"]["contribution"] is None
+    # "talked" has real messages: measured right away.
+    assert by_login["talked"]["chatters"] == 1
+    assert by_login["talked"]["contribution"] == 1.0
+
+
 if __name__ == "__main__":
     tests = [
         test_privmsg_regex,
         test_rolling_window_counts_only_recent_uniques,
         test_prune_removes_expired_channels,
         test_snapshot_computes_contribution,
+        test_snapshot_orders_by_contribution,
+        test_min_sample_shows_dash_until_measured,
     ]
     for test in tests:
         test()

@@ -1853,10 +1853,10 @@ function loadLeaderboard() {
         if (chat.ready) {
             const minutes = Math.max(1, Math.round((chat.window_seconds || 300) / 60));
             $("lbFootnote").textContent =
-                "Chat contribution is the share of a stream's live viewers who sent a message in the last " +
-                minutes + " minutes, measured from live Twitch chat. It is collected continuously, so a stream " +
-                "that has just been added can take a few minutes to show a real number; streams we are not " +
-                "collecting chat from yet show a dash.";
+                "Streams are ordered by chat contribution: the share of a stream's live viewers who sent a " +
+                "message in the last " + minutes + " minutes, measured from live Twitch chat. A stream shows a " +
+                "number once it has been collecting chat for a while (or has messages); streams we are not " +
+                "collecting chat from yet show a dash and sort to the bottom.";
         } else {
             $("lbFootnote").textContent =
                 "The live top-stream list is working. To measure chat contribution, set TWITCH_USERNAME and a " +
