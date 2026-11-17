@@ -67,9 +67,9 @@ def redirect_uri(request: Request | None = None) -> str | None:
     return f"{base}{CALLBACK_PATH}" if base else None
 
 
-def snapshot():
-    """What the dashboard receives every second."""
-    data = monitor.snapshot()
+def snapshot(include_chat: bool = True):
+    """What the dashboard receives every second (chat is pushed separately)."""
+    data = monitor.snapshot(include_chat=include_chat)
     data["emotes_version"] = emotes.version
     data["auto_clip_enabled"] = clip_manager.auto_enabled
     data["clipping"] = clip_manager.state(redirect_uri())
@@ -107,6 +107,30 @@ async def read_json(request: Request) -> dict:
 
 # -------------------------------------------------------------- live updates
 
+async def broadcast(data: dict):
+    async def push(ws: WebSocket):
+        try:
+            await asyncio.wait_for(ws.send_json(data), timeout=5)
+        except Exception:
+            clients.discard(ws)
+
+    if clients:
+        await asyncio.gather(*(push(ws) for ws in list(clients)))
+
+
+def push_chat(message: dict):
+    """Sends one chat message to every dashboard right away."""
+    if not clients:
+        return
+    try:
+        asyncio.get_running_loop().create_task(broadcast({"type": "chat", "message": message}))
+    except RuntimeError:
+        pass  # no event loop running (shutdown)
+
+
+monitor.on_chat = push_chat
+
+
 async def broadcast_loop():
     while True:
         try:
@@ -124,16 +148,8 @@ async def broadcast_loop():
                         clip_manager.last_error = f"Auto-clip skipped: {exc}"
                         log.warning("Auto-clip skipped: %s", exc)
 
-            data = snapshot()
-
-            async def push(ws: WebSocket):
-                try:
-                    await asyncio.wait_for(ws.send_json(data), timeout=5)
-                except Exception:
-                    clients.discard(ws)
-
             if clients:
-                await asyncio.gather(*(push(ws) for ws in list(clients)))
+                await broadcast(snapshot(include_chat=False))
         except asyncio.CancelledError:
             raise
         except Exception:
