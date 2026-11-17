@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#12112a">
+<title>AutoClip</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Crect width='26' height='26' rx='8' fill='%23a995ff'/%3E%3Cpath d='M4.5 15.5h4l2-6 3.5 10 2.5-7 1.5 3h3.5' fill='none' stroke='%2312112a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body class="loading">
+<div class="glow" aria-hidden="true"></div>
+
+<div class="wrap app" id="app">
+
+    <header class="top enter-up">
+        <button class="icon-btn menu-toggle" id="menuToggle" type="button" aria-label="Open navigation" aria-expanded="false">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="brand">
+            <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect width="26" height="26" rx="8" fill="#a995ff"/><path d="M4.5 15.5h4l2-6 3.5 10 2.5-7 1.5 3h3.5" fill="none" stroke="#12112a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            AutoClip
+        </div>
+
+        <div class="channel">
+            <span class="channel-name" id="channel">&nbsp;</span>
+            <span class="status" id="status" data-state="wait" role="status">
+                <span class="pulse" aria-hidden="true"></span>
+                <span id="statusText">Connecting</span>
+            </span>
+        </div>
+
+        <div class="controls">
+            <label class="switch" id="autoSwitch">
+                <input type="checkbox" id="auto">
+                <span class="track"><span class="thumb"></span></span>
+                <span class="label">Auto-clip</span>
+            </label>
+            <button class="btn" id="clipBtn" type="button">
+                <span class="rec-dot" aria-hidden="true"></span>
+                <span id="clipBtnText">Set up clipping</span>
+            </button>
+            <button class="icon-btn" id="setupBtn" type="button" aria-label="Clipping settings">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <nav class="nav-drawer" id="navDrawer" aria-label="Main navigation" hidden>
+        <button class="nav-item active" type="button" data-page="dashboard">
+            <span class="nav-icon">⌁</span><span><b>AutoClip</b><small>Stream monitoring and clips</small></span>
+        </button>
+        <button class="nav-item" type="button" data-page="contribution">
+            <span class="nav-icon">↗</span><span><b>Chat Contribution</b><small>Live streamer leaderboard</small></span>
+        </button>
+    </nav>
+
+    <main>
+        <div id="dashboardPage">
+        <section class="hero enter-up up" id="hero" style="--d:90ms" aria-label="Chat activity">
+            <div class="hero-head">
+                <div>
+                    <div class="read">
+                        <span class="rate" id="rate">0.0</span>
+                        <span class="rate-unit">messages per second</span>
+                    </div>
+                    <p class="verdict" id="verdict" aria-live="polite">Connecting to chat</p>
+                </div>
+
+                <div>
+                    <div class="meter off" id="meter">
+                        <div class="meter-label"><span>Spike meter</span><span id="meterText">&mdash;</span></div>
+                        <div class="heat">
+                            <div class="heat-track"><div class="heat-fill" id="heatFill"></div></div>
+                            <div class="heat-tick" title="Clip trigger"></div>
+                        </div>
+                    </div>
+                    <div class="calibrate done" id="calibrate">
+                        <div>
+                            <div class="calibrate-inner">
+                                <span>Learning what normal looks like</span>
+                                <div class="bar"><i id="calFill"></i></div>
+                                <span id="calLeft"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="trace" id="trace">
+                <canvas id="canvas" role="img" aria-label="Chat activity over the last two minutes"></canvas>
+                <div class="tip" id="tip"></div>
+            </div>
+        </section>
+
+        <dl class="strip enter-up up" style="--d:170ms">
+            <div class="stat"><dt>Normal pace</dt><dd><span class="num" id="sBase">&mdash;</span><small>msg/s</small></dd></div>
+            <div class="stat"><dt>Clip trigger</dt><dd><span class="num" id="sThr">&mdash;</span><small>msg/s</small></dd></div>
+            <div class="stat"><dt>Messages</dt><dd><span class="num" id="sMsgs">0</span></dd></div>
+            <div class="stat"><dt>Chatters</dt><dd><span class="num" id="sChat">0</span></dd></div>
+            <div class="stat"><dt>Clips saved</dt><dd><span class="num" id="sClips">0</span></dd></div>
+        </dl>
+
+        <div class="grid">
+            <section class="panel chat-panel enter-up up" style="--d:250ms" aria-labelledby="chatTitle">
+                <div class="panel-head">
+                    <h2 id="chatTitle">Chat</h2>
+                    <div class="panel-meta"><span class="chip live" id="emoteChip">7TV loading</span></div>
+                </div>
+                <div class="chat-wrap">
+                    <div class="chat-list" id="chat" aria-live="off"></div>
+                    <button class="pill" id="jump" type="button" hidden></button>
+                </div>
+                <div class="note" id="emoteNote" hidden></div>
+            </section>
+
+            <div class="side">
+                <section class="panel enter-up up" style="--d:330ms" aria-labelledby="clipsTitle">
+                    <div class="panel-head">
+                        <h2 id="clipsTitle">Clips</h2>
+                        <div class="panel-meta"><button class="chip warn" id="clipChip" type="button">Setup needed</button></div>
+                    </div>
+                    <ul class="list" id="clips"></ul>
+                    <div class="note" id="clipNote" hidden></div>
+                </section>
+
+                <section class="panel enter-up up" style="--d:410ms" aria-labelledby="spikesTitle">
+                    <div class="panel-head">
+                        <h2 id="spikesTitle">Highlights</h2>
+                        <div class="panel-meta"><span id="spikeCount"></span></div>
+                    </div>
+                    <ul class="list" id="events"></ul>
+                </section>
+            </div>
+        </div>
+        </div>
+
+        <section class="leaderboard-page" id="contributionPage" hidden>
+            <div class="page-heading">
+                <div>
+                    <div class="eyebrow">TWITCH ANALYTICS</div>
+                    <h1>Chat Contribution</h1>
+                    <p>See how actively audiences participate across the biggest live streams.</p>
+                </div>
+                <button class="btn" id="refreshLeaderboard" type="button">Refresh list</button>
+            </div>
+            <div class="leaderboard-summary">
+                <div><span>Streams tracked</span><strong id="lbStreamCount">—</strong></div>
+                <div><span>Live viewers represented</span><strong id="lbViewerTotal">—</strong></div>
+                <div><span>Average chat contribution</span><strong id="lbAverage">—</strong></div>
+            </div>
+            <div class="panel leaderboard-panel">
+                <div class="leaderboard-toolbar">
+                    <div><h2>Top 100 live streamers</h2><p>Sorted by current live viewers</p></div>
+                    <span class="chip live" id="lbUpdated">Loading</span>
+                </div>
+                <div class="table-scroll">
+                    <table class="leaderboard-table">
+                        <thead><tr><th>#</th><th>Streamer</th><th>Category</th><th class="numeric">Viewers</th><th class="numeric">Active chatters</th><th class="numeric">Chat contribution</th></tr></thead>
+                        <tbody id="leaderboardRows"><tr><td colspan="6" class="table-message">Loading live streams…</td></tr></tbody>
+                    </table>
+                </div>
+                <div class="leaderboard-footnote" id="lbFootnote">Chat contribution is calculated from unique people who send a message in the last five minutes divided by live viewers. Chat data is not connected yet, so percentages will remain unavailable until that collection is implemented.</div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<dialog class="sheet" id="setup" aria-labelledby="setupTitle">
+    <div class="sheet-head">
+        <h2 id="setupTitle">Clipping setup</h2>
+        <button class="icon-btn" id="setupClose" type="button" aria-label="Close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+    </div>
+    <div class="sheet-body">
+        <div class="banner" id="setupBanner"></div>
+        <ol class="steps">
+            <li class="step" id="st1">
+                <span class="step-mark">1</span>
+                <div>
+                    <h3>Create a Twitch app</h3>
+                    <p>In the <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">Twitch developer console</a>, register an application with client type <b>Confidential</b> and add this OAuth redirect URL.</p>
+                    <div class="copy-row">
+                        <code class="code" id="redirect"></code>
+                        <button class="btn small" id="copyRedirect" type="button">Copy</button>
+                    </div>
+                </div>
+            </li>
+            <li class="step" id="st2">
+                <span class="step-mark">2</span>
+                <div>
+                    <h3>Add the keys to your server</h3>
+                    <p>Set <code>TWITCH_CLIENT_ID</code>, <code>TWITCH_CLIENT_SECRET</code> and <code>ADMIN_KEY</code> in your host's environment settings, then redeploy.</p>
+                    <p id="missing"></p>
+                </div>
+            </li>
+            <li class="step" id="st3">
+                <span class="step-mark">3</span>
+                <div>
+                    <h3>Connect your Twitch account</h3>
+                    <p id="connectText"></p>
+                    <div class="row">
+                        <button class="btn primary" id="connectBtn" type="button">Connect Twitch</button>
+                        <button class="btn" id="disconnectBtn" type="button" hidden>Disconnect</button>
+                    </div>
+                    <p class="fine" id="saveNote"></p>
+                </div>
+            </li>
+            <li class="step" id="st4" hidden>
+                <span class="step-mark">4</span>
+                <div>
+                    <h3>Keep it connected after restarts</h3>
+                    <p>Some hosts wipe saved files whenever the app restarts. Copy the refresh token and save it as <code>TWITCH_CLIP_REFRESH_TOKEN</code> so clipping keeps working.</p>
+                    <button class="btn small" id="copyToken" type="button">Copy refresh token</button>
+                </div>
+            </li>
+        </ol>
+    </div>
+</dialog>
+
+<dialog class="sheet small" id="keyDialog" aria-labelledby="keyTitle">
+    <form class="pad" id="keyForm" autocomplete="off">
+        <h2 id="keyTitle">Enter the admin key</h2>
+        <p class="lead">Clip controls are protected. Use the <code>ADMIN_KEY</code> set on your server.</p>
+        <label class="field">
+            <span>Admin key</span>
+            <input id="keyInput" type="password" autocomplete="off" spellcheck="false" required>
+        </label>
+        <p class="field-error" id="keyError" hidden></p>
+        <div class="row end">
+            <button class="btn" id="keyCancel" type="button">Cancel</button>
+            <button class="btn primary" id="keyOk" type="submit">Unlock</button>
+        </div>
+    </form>
+</dialog>
+
+<script>
+/*__JS__*/
+</script>
+</body>
+</html>
