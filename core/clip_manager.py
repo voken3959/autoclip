@@ -72,7 +72,7 @@ class ClipManager:
         # Auto-clips are made this long after chat's busiest moment, so the
         # clip has the moment and the reaction to it. Twitch's clip ends about
         # 5 seconds after the request and covers `duration` seconds.
-        self.delay_after_peak = _env_float("CLIP_DELAY_AFTER_PEAK_SECONDS", 10, 0, 30)
+        self.delay_after_peak = _env_float("CLIP_DELAY_AFTER_PEAK_SECONDS", 5, 0, 30)
         self.max_peak_wait = 45.0   # never wait longer than this for a spike to peak
 
         self.last_error: str | None = None
