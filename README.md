@@ -104,7 +104,30 @@ connected before it existed.
 Twitch only makes clips while the channel is live, and the streamer's clip
 restrictions apply. A clip is only listed as Ready once Twitch has really published it.
 
-## 5. VPS deployment
+## 5. Chat contribution
+
+The **Chat Contribution** page lists the top 100 live streams and shows, for each
+one, how actively its audience takes part in chat:
+
+```
+chat contribution = unique people who sent a message in the last 5 minutes
+                    / current live viewers
+```
+
+- The stream list comes from Twitch Helix and needs `TWITCH_CLIENT_ID` and
+  `TWITCH_CLIENT_SECRET` (the same keys clipping uses, as an app token).
+- Chat is read over IRC using the same `TWITCH_USERNAME` / `TWITCH_OAUTH_TOKEN`
+  login as the dashboard chat (a `chat:read` token can join any public channel).
+  Each IRC connection joins up to 20 streamer channels at a time, so the top 100
+  use a handful of connections.
+- The rolling window, refresh rate, connections and stream count are tunable:
+  `LEADERBOARD_WINDOW_SECONDS`, `LEADERBOARD_REFRESH_SECONDS`,
+  `LEADERBOARD_CHANNELS_PER_CONNECTION` and `LEADERBOARD_MAX_STREAMS`.
+
+Streams that have not been collected chat from yet show a dash; the average
+contribution is the mean across the streams that do have data.
+
+## 6. VPS deployment
 
 Do not expose this prototype directly to the public internet yet. Before VPS deployment,
 add HTTPS, a login system, secure secret storage, reverse-proxy configuration, and

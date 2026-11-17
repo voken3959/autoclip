@@ -20,6 +20,7 @@ from core.twitch_chat import TwitchChatClient
 from core.twitch_auth import AuthError, TwitchAuth
 from core.clip_manager import ClipError, ClipManager
 from core.emotes import SevenTVEmotes
+from core.leaderboard import LeaderboardCollector
 from dashboard.page import PAGE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -45,6 +46,14 @@ chat_client = TwitchChatClient(
     channel=CHANNEL,
     monitor=monitor,
     on_room_id=emotes.set_channel_id,
+)
+# Collects chat from the top live streams so the Chat Contribution page can
+# show a real participation number for each of them.
+leaderboard = LeaderboardCollector(
+    username=chat_client.username,
+    token=chat_client.token,
+    client_id=os.getenv("TWITCH_CLIENT_ID", "").strip(),
+    client_secret=os.getenv("TWITCH_CLIENT_SECRET", "").strip(),
 )
 tasks: list[asyncio.Task] = []
 clients: set[WebSocket] = set()
@@ -162,6 +171,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(broadcast_loop()))
     tasks.append(asyncio.create_task(emotes.run()))
     tasks.append(asyncio.create_task(auth.run(clip_manager.http)))
+    tasks.append(asyncio.create_task(leaderboard.run()))
     if chat_client.ready:
         tasks.append(asyncio.create_task(chat_client.run()))
     else:
@@ -171,6 +181,7 @@ async def lifespan(app: FastAPI):
         task.cancel()
     tasks.clear()
     await chat_client.close()
+    await leaderboard.aclose()
     await clip_manager.aclose()
 
 
@@ -216,6 +227,22 @@ async def emotes_endpoint():
         emotes.payload(),
         headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
     )
+
+
+@app.get("/api/leaderboard")
+async def leaderboard_endpoint():
+    """Top live streams plus each one's measured chat contribution.
+
+    Needs TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET for the stream list; the
+    contribution numbers also need the chat:read login to be configured.
+    """
+    if not leaderboard.app_ready:
+        raise ApiError(
+            409,
+            "leaderboard_unavailable",
+            "Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET on the server to load live streams.",
+        )
+    return leaderboard.snapshot()
 
 
 @app.websocket("/ws")
