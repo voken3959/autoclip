@@ -1813,12 +1813,22 @@ function loadLeaderboard() {
             viewers.textContent = fmt(stream.viewers, 0);
             tr.appendChild(viewers);
             const chatters = document.createElement("td");
-            chatters.className = "numeric contribution-pending";
-            chatters.textContent = "Not measured";
+            chatters.className = "numeric";
+            if (stream.chatters === null || stream.chatters === undefined) {
+                chatters.className = "numeric contribution-pending";
+                chatters.textContent = "—";
+            } else {
+                chatters.textContent = fmt(stream.chatters, 0);
+            }
             tr.appendChild(chatters);
             const contribution = document.createElement("td");
-            contribution.className = "numeric contribution-pending";
-            contribution.textContent = "—";
+            contribution.className = "numeric";
+            if (stream.contribution === null || stream.contribution === undefined) {
+                contribution.className = "numeric contribution-pending";
+                contribution.textContent = "—";
+            } else {
+                contribution.textContent = fmt(stream.contribution, 1) + "%";
+            }
             tr.appendChild(contribution);
             body.appendChild(tr);
         });
@@ -1833,9 +1843,25 @@ function loadLeaderboard() {
         }
         $("lbStreamCount").textContent = fmt(streams.length);
         $("lbViewerTotal").textContent = fmt(viewerTotal);
-        $("lbAverage").textContent = "—";
+        $("lbAverage").textContent =
+            (data.average_contribution === null || data.average_contribution === undefined)
+                ? "—"
+                : fmt(data.average_contribution, 1) + "%";
         $("lbUpdated").textContent = "Updated " + new Date(data.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-        $("lbFootnote").textContent = "The live top-100 list is working. Chat contribution is intentionally left blank for now: Twitch does not provide a public, universal count of unique active chatters for every channel. AutoClip needs a separate chat-collection system before it can calculate a trustworthy five-minute participation rate.";
+
+        const chat = data.chat || {};
+        if (chat.ready) {
+            const minutes = Math.max(1, Math.round((chat.window_seconds || 300) / 60));
+            $("lbFootnote").textContent =
+                "Chat contribution is the share of a stream's live viewers who sent a message in the last " +
+                minutes + " minutes, measured from live Twitch chat. It is collected continuously, so a stream " +
+                "that has just been added can take a few minutes to show a real number; streams we are not " +
+                "collecting chat from yet show a dash.";
+        } else {
+            $("lbFootnote").textContent =
+                "The live top-stream list is working. To measure chat contribution, set TWITCH_USERNAME and a " +
+                "TWITCH_OAUTH_TOKEN with the chat:read scope on the server, then refresh.";
+        }
         leaderboardLoadedAt = Date.now();
     }).catch(error => {
         body.replaceChildren();
