@@ -642,6 +642,17 @@ button.chip:hover { filter: brightness(1.25); }
 .clip-error { margin-top: 3px; font-size: 13px; line-height: 1.4; color: var(--hot); animation: swap 0.4s var(--ease); }
 .clip-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .links { display: flex; gap: 12px; font-size: 13px; }
+.links .linkbtn {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--lav);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+}
+.links .linkbtn:hover { text-decoration: underline; }
+.links .linkbtn[disabled] { opacity: 0.5; cursor: default; text-decoration: none; }
 
 /* -------------------------------------------------------------- highlights */
 
@@ -798,6 +809,7 @@ dialog.sheet::backdrop { background: rgba(8, 7, 24, 0.7); animation: fade 0.3s; 
     25% { transform: translateX(-4px); }
     75% { transform: translateX(4px); }
 }
+.sheet p.fine { margin: 12px 0 0; font-size: 13px; line-height: 1.5; color: var(--faint); }
 .sheet p.lead { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
 
 /* --------------------------------------------------------------- page states */

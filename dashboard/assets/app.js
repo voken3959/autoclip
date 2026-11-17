@@ -302,7 +302,7 @@ function askKey(problem) {
 }
 
 // Calls a protected endpoint. Asks for the admin key when the server wants one.
-async function api(path, body) {
+async function api(path, body, raw) {
     for (let attempt = 0; attempt < 3; attempt++) {
         const headers = { "Content-Type": "application/json" };
         const key = getKey();
@@ -318,6 +318,9 @@ async function api(path, body) {
         } catch (e) {
             return { ok: false, code: "network", error: "Couldn't reach the server. Check your connection and try again." };
         }
+
+        // `raw` hands back a successful response untouched (used for downloads).
+        if (raw && response.ok) return { ok: true, response: response };
 
         let data = {};
         try { data = await response.json(); } catch (e) { data = {}; }
@@ -955,6 +958,7 @@ function renderChat(messages, forceRebuild) {
 
 const clipRows = new Map();
 const CLIP_STATUS = {
+    waiting: ["Waiting", "live"],
     creating: ["Starting", "live"],
     processing: ["Saving", "live"],
     ready: ["Ready", "ok"],
@@ -994,7 +998,7 @@ function paintThumb(row, clip) {
     const thumb = row.querySelector(".thumb");
     thumb.replaceChildren();
 
-    if (clip.status === "creating" || clip.status === "processing") {
+    if (clip.status === "waiting" || clip.status === "creating" || clip.status === "processing") {
         thumb.appendChild(el("span", "spin"));
     } else if (clip.status === "failed") {
         thumb.innerHTML = ICON.warn;
@@ -1023,6 +1027,12 @@ function paintLinks(row, clip) {
     links.replaceChildren();
     if (clip.status !== "ready") return;
 
+    const save = el("button", "linkbtn", "Save");
+    save.type = "button";
+    save.title = "Download the video file";
+    save.addEventListener("click", () => saveClip(clip, save));
+    links.appendChild(save);
+
     for (const [label, url] of [["Watch", clip.url], ["Edit", clip.edit_url]]) {
         const href = safeUrl(url);
         if (!href) continue;
@@ -1044,7 +1054,9 @@ function paintClip(row, clip) {
     let source = clip.source === "auto" ? "Auto" : "Manual";
     if (clip.source === "auto" && clip.multiplier) source += ", " + fmt(clip.multiplier, 1) + "×";
     row.querySelector(".src").textContent = source;
-    row.querySelector(".when").textContent = agoText(ageOf(clip));
+    row.querySelector(".when").textContent = clip.status === "waiting"
+        ? (clip.due_in ? "Clipping in " + clip.due_in + "s" : "Clipping now")
+        : agoText(ageOf(clip));
 
     const problem = row.querySelector(".clip-error");
     if (clip.error) {
@@ -1066,6 +1078,44 @@ function paintClip(row, clip) {
 
     paintThumb(row, clip);
     paintLinks(row, clip);
+}
+
+function peakText(clipping) {
+    const seconds = clipping && clipping.delay_after_peak;
+    return seconds ? " " + Math.round(seconds) + " seconds after the peak" : "";
+}
+
+async function saveClip(clip, button) {
+    if (button.disabled) return;
+    button.disabled = true;
+    const label = button.textContent;
+    button.textContent = "Saving";
+
+    try {
+        const result = await api("/api/clips/" + encodeURIComponent(clip.uid) + "/download", {}, true);
+        if (!result.ok) {
+            apiFailed(result);
+            return;
+        }
+        const blob = await result.response.blob();
+        const disposition = result.response.headers.get("Content-Disposition") || "";
+        const match = /filename="([^"]+)"/.exec(disposition);
+
+        const href = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = href;
+        link.download = match ? match[1] : (clip.clip_id || "clip") + ".mp4";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(href), 60000);
+        toast("Clip saved to your downloads.", "ok");
+    } catch (error) {
+        toast("The download didn't finish. Try again.", "err");
+    } finally {
+        button.disabled = false;
+        button.textContent = label;
+    }
 }
 
 function emptyBox(title, body, action) {
@@ -1095,7 +1145,7 @@ function renderClips(list, clipping) {
             clipsEmptyKey = key;
             holder.replaceChildren(
                 ready
-                    ? emptyBox("No clips yet", "Press Clip now, or turn on auto-clip to save one every time chat spikes.")
+                    ? emptyBox("No clips yet", "Press Clip now, or turn on auto-clip to save one" + peakText(clipping) + " every time chat spikes.")
                     : emptyBox(
                         "Clipping isn't set up yet",
                         (clipping && clipping.reason) || "Connect your Twitch account to start clipping.",
@@ -1166,7 +1216,7 @@ function paintSpike(row, spike, clips) {
     if (row._clip !== clip.status) {
         const changed = row._clip !== undefined;
         row._clip = clip.status;
-        const label = { creating: "Clipping", processing: "Clipping", ready: "Clipped", failed: "Clip failed" }[clip.status];
+        const label = { waiting: "Queued", creating: "Clipping", processing: "Clipping", ready: "Clipped", failed: "Clip failed" }[clip.status];
         chip.className = "chip " + (CLIP_STATUS[clip.status] || ["", ""])[1];
         chip.textContent = label;
         if (changed) restartAnimation(chip, "pop");
@@ -1323,7 +1373,7 @@ $("auto").addEventListener("change", async event => {
     }
     if (S.snap) S.snap.auto_clip_enabled = wanted;
     toast(
-        wanted ? "Auto-clip is on. A clip is saved every time chat spikes." : "Auto-clip is off.",
+        wanted ? "Auto-clip is on. A clip is saved" + peakText(S.snap && S.snap.clipping) + " every time chat spikes." : "Auto-clip is off.",
         wanted ? "ok" : ""
     );
 });
@@ -1370,7 +1420,8 @@ function renderSetup() {
     const text = $("connectText");
 
     if (c.connected && !c.needs_reconnect) {
-        text.textContent = "Connected" + (c.account ? " as " + c.account : "") + ". Clips are made through this account.";
+        text.textContent = "Connected" + (c.account ? " as " + c.account : "") + ". Clips are made through this account." +
+            (c.can_download ? "" : " To save clips as video files, connect again and approve the extra permission.");
         connect.textContent = "Connect a different account";
         connect.className = "btn";
         disconnect.hidden = false;
@@ -1380,11 +1431,15 @@ function renderSetup() {
         connect.className = "btn primary";
         disconnect.hidden = false;
     } else {
-        text.textContent = "You'll go to Twitch to allow clip creation, then come straight back here. The account you pick makes the clips.";
+        text.textContent = "You'll go to Twitch to allow clip creation and saving, then come straight back here. The account you pick makes the clips.";
         connect.textContent = "Connect Twitch";
         connect.className = "btn primary";
         disconnect.hidden = true;
     }
+
+    $("saveNote").textContent =
+        "Saving clips as video files is a Twitch rule: it only works if the account is " +
+        ((s && s.channel) || "the channel owner") + " or one of their channel editors.";
 
     $("st4").hidden = !(c.connected && !c.needs_reconnect);
 }
@@ -1493,7 +1548,7 @@ function announceSpike(spike) {
     restartAnimation($("hero"), "fire");
     const auto = S.snap && S.snap.auto_clip_enabled;
     toast(
-        "Chat spiked to " + fmt(spike.multiplier, 1) + "× normal" + (auto ? ". Auto-clip is saving it." : "."),
+        "Chat spiked to " + fmt(spike.multiplier, 1) + "× normal" + (auto ? ". Auto-clip will save it" + peakText(S.snap && S.snap.clipping) + "." : "."),
         "warn"
     );
 }

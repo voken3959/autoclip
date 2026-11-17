@@ -35,7 +35,9 @@ TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
 REVOKE_URL = "https://id.twitch.tv/oauth2/revoke"
 
-SCOPE = "clips:edit"
+SCOPE = "clips:edit"                      # needed to create clips
+DOWNLOAD_SCOPE = "editor:manage:clips"    # lets an editor of the channel save clips as video files
+AUTHORIZE_SCOPES = f"{SCOPE} {DOWNLOAD_SCOPE}"
 REFRESH_MARGIN = 120      # refresh when fewer than this many seconds are left
 STATE_TTL = 600           # a sign-in must be completed within 10 minutes
 CHECK_EVERY = 30 * 60     # background validation interval
@@ -91,6 +93,11 @@ class TwitchAuth:
     def connected(self) -> bool:
         return self.has_token and self.error is None
 
+    @property
+    def can_download(self) -> bool:
+        """Whether the login was approved with a permission for saving clips."""
+        return DOWNLOAD_SCOPE in self.scopes or "channel:manage:clips" in self.scopes
+
     def status(self) -> dict:
         return {
             "client_configured": bool(self.client_id),
@@ -98,6 +105,7 @@ class TwitchAuth:
             "connected": self.connected,
             "login": self.login,
             "error": self.error,
+            "can_download": self.can_download,
         }
 
     def problem(self) -> str | None:
@@ -306,7 +314,7 @@ class TwitchAuth:
             "client_id": self.client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": SCOPE,
+            "scope": AUTHORIZE_SCOPES,
             "state": state,
             "force_verify": "true",   # always let the person pick the account
         })

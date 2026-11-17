@@ -87,7 +87,20 @@ plan does) lose the saved login, so open the setup screen after connecting, pres
 **Copy refresh token** and save it as `TWITCH_CLIP_REFRESH_TOKEN` in the host's
 settings.
 
-Each clip goes through Starting, Saving, then Ready (or Failed with the reason).
+Every clip is titled with the channel name (set `CLIP_TITLE` to change that). Twitch
+has no private-clip setting, so clips are public on Twitch like any other clip.
+
+Auto-clips are made 10 seconds after chat's busiest moment of a spike
+(`CLIP_DELAY_AFTER_PEAK_SECONDS`). The clip covers `CLIP_DURATION_SECONDS` and ends
+about 5 seconds after it is made, so the peak sits in the middle of a 30 second clip.
+**Clip now** clips immediately.
+
+Each clip goes through Waiting (auto-clips only), Starting, Saving, then Ready (or
+Failed with the reason). Ready clips have a **Save** button that downloads the video
+file from the dashboard. Twitch only allows that for the channel owner and the
+channel's editors, so it works when the connected account is one of them. The sign-in
+asks for the extra `editor:manage:clips` permission for this; connect again if you
+connected before it existed.
 Twitch only makes clips while the channel is live, and the streamer's clip
 restrictions apply. A clip is only listed as Ready once Twitch has really published it.
 

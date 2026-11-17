@@ -183,6 +183,22 @@ class Monitor:
         baseline = max(baseline, 0.5)
         return max(baseline * self.multiplier_threshold, baseline + self.min_extra)
 
+    def peak_since(self, start_tick: int) -> tuple[int, float]:
+        """When chat was busiest since `start_tick` (a second number, see `tick`).
+
+        Returns (second number, messages per second averaged over 3 seconds).
+        If several moments are equally busy the earliest one wins.
+        """
+        counts = list(self.second_counts)
+        first_tick = self.current_second - len(counts)
+        best_tick, best = start_tick, -1.0
+        for i in range(max(0, start_tick - first_tick), len(counts)):
+            window = counts[max(0, i - 2): i + 1]
+            smooth = sum(window) / len(window)
+            if smooth > best + 1e-9:
+                best, best_tick = smooth, first_tick + i
+        return best_tick, max(best, 0.0)
+
     def _avg_recent(self, seconds: int) -> float:
         recent = list(self.second_counts)[-seconds:]
         if not recent:

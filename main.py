@@ -5,10 +5,11 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -115,9 +116,9 @@ async def broadcast_loop():
                 if clip_manager.auto_enabled:
                     try:
                         clip_manager.request_clip(
-                            f"AutoClip highlight - {event['multiplier']:.1f}x chat activity",
                             source="auto",
                             meta={"event_id": event["id"], "multiplier": event["multiplier"]},
+                            after_peak=True,
                         )
                     except ClipError as exc:
                         clip_manager.last_error = f"Auto-clip skipped: {exc}"
@@ -221,13 +222,50 @@ async def admin_check(request: Request):
 @app.post("/api/clip")
 async def clip_now(request: Request):
     await require_admin(request)
-    body = await read_json(request)
-    title = str(body.get("title") or "").strip() or "AutoClip manual clip"
     try:
-        record = clip_manager.request_clip(title, source="manual")
+        record = clip_manager.request_clip(source="manual")
     except ClipError as exc:
         raise ApiError(exc.status, "clip_unavailable", str(exc))
     return {"ok": True, "clip": record}
+
+
+@app.post("/api/clips/{uid}/download")
+async def clip_download(uid: str, request: Request):
+    """Sends the clip's video file so it can be saved straight from the dashboard."""
+    await require_admin(request)
+    try:
+        url, filename = await clip_manager.download_url(uid)
+        upstream = await clip_manager.http.send(
+            clip_manager.http.build_request("GET", url), stream=True
+        )
+    except ClipError as exc:
+        raise ApiError(exc.status, "clip_download_unavailable", str(exc))
+    except AuthError as exc:
+        raise ApiError(409, exc.code, str(exc))
+    except httpx.HTTPError:
+        raise ApiError(502, "network", "Couldn't reach Twitch. Try again in a moment.")
+
+    if upstream.status_code != 200:
+        await upstream.aclose()
+        raise ApiError(502, "clip_download_failed", "Twitch didn't hand over the video file. Try again in a moment.")
+
+    async def body():
+        try:
+            async for chunk in upstream.aiter_bytes(64 * 1024):
+                yield chunk
+        finally:
+            await upstream.aclose()
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+        # Video doesn't compress; this keeps the gzip middleware out of the way.
+        "Content-Encoding": "identity",
+    }
+    length = upstream.headers.get("content-length")
+    if length:
+        headers["Content-Length"] = length
+    return StreamingResponse(body(), media_type="video/mp4", headers=headers)
 
 
 @app.post("/api/auto-clip")
