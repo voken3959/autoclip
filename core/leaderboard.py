@@ -81,12 +81,22 @@ class LeaderboardCollector:
         self.refresh_seconds = env_int("LEADERBOARD_REFRESH_SECONDS", 60)
         self.per_connection = env_int("LEADERBOARD_CHANNELS_PER_CONNECTION", 20)
         self.max_streams = env_int("LEADERBOARD_MAX_STREAMS", 100)
+        # A channel only reports a number once it has been collecting for at
+        # least this long (or has real messages), so a stream that was just
+        # added shows a dash instead of a bogus 0%.
+        self.min_sample_seconds = env_int("LEADERBOARD_MIN_SAMPLE_SECONDS", 60)
+        # The page re-renders from the same numbers; serving a snapshot for a
+        # few seconds keeps repeated loads fast and consistent.
+        self.snapshot_cache_seconds = env_int("LEADERBOARD_SNAPSHOT_CACHE_SECONDS", 10)
 
         self.streams: list[dict] = []          # cached, newest refresh
         self.last_error: str | None = None
 
         self._activity: dict[str, deque] = {}  # login -> [(monotonic ts, user)]
+        self._joined_at: dict[str, float] = {} # login -> monotonic join time
         self._connections: list[_IrcConnection] = []
+        self._snapshot_cache: dict | None = None
+        self._snapshot_cached_at = 0.0
 
         self._app_token = ""
         self._app_token_expires = 0.0
@@ -183,6 +193,7 @@ class LeaderboardCollector:
         streams.sort(key=lambda s: s["viewers"], reverse=True)
         self.streams = streams[: self.max_streams]
         self.last_error = None
+        self._invalidate_snapshot()
         log.info("Leaderboard: %d live streams tracked", len(self.streams))
 
     # --------------------------------------------------------------- IRC joins
@@ -200,6 +211,9 @@ class LeaderboardCollector:
         for login in list(self._activity):
             if login not in wanted:
                 self._activity.pop(login, None)
+        for login in list(self._joined_at):
+            if login not in wanted:
+                self._joined_at.pop(login, None)
 
         if not desired:
             await self._close_connections()
@@ -224,21 +238,44 @@ class LeaderboardCollector:
             len(desired), len(chunks),
         )
         await self._close_connections()
+        now = time.monotonic()
         for chunk in chunks:
             conn = _IrcConnection(self.username, self.token, chunk, self)
             self._connections.append(conn)
+            # Optimistic so snapshot() has a join time right away; the
+            # connection overwrites it once IRC accepts the JOIN.
+            self.note_joined(chunk, now)
             asyncio.create_task(conn.run())
+        self._invalidate_snapshot()
 
     async def _close_connections(self) -> None:
         for conn in list(self._connections):
             await conn.close()
         self._connections.clear()
 
+    def note_joined(self, channels, when: float | None = None) -> None:
+        """Record that we started collecting chat for these channels."""
+        stamp = time.monotonic() if when is None else when
+        for channel in channels:
+            self._joined_at.setdefault(str(channel).lower(), stamp)
+
+    def note_left(self, channels) -> None:
+        """Stop counting a channel's chat collection time."""
+        for channel in channels:
+            self._joined_at.pop(str(channel).lower(), None)
+
+    def _invalidate_snapshot(self) -> None:
+        """Drop the cached snapshot so the next call rebuilds it."""
+        self._snapshot_cache = None
+        self._snapshot_cached_at = 0.0
+
     def on_connection_closed(self, conn: "_IrcConnection") -> None:
         try:
             self._connections.remove(conn)
         except ValueError:
             pass
+        self.note_left(conn.channels)
+        self._invalidate_snapshot()
 
     # ------------------------------------------------------- message window
 
@@ -294,7 +331,17 @@ class LeaderboardCollector:
     # --------------------------------------------------------------- snapshot
 
     def snapshot(self) -> dict:
-        """What /api/leaderboard returns: streams plus the contribution stats."""
+        """What /api/leaderboard returns: streams plus the contribution stats.
+
+        The list is ordered by chat contribution (highest first); streams we
+        haven't measured yet sort last.
+        """
+        now = time.monotonic()
+        if self._snapshot_cache is not None and (
+            now - self._snapshot_cached_at < self.snapshot_cache_seconds
+        ):
+            return self._snapshot_cache
+
         self._prune()
 
         joined = {
@@ -308,7 +355,13 @@ class LeaderboardCollector:
         for item in self.streams:
             login = item["login"]
             collecting = login in joined
-            chatters = self.chatters_for(login) if collecting else None
+            chatters = self.chatters_for(login) if collecting else 0
+            # Only report a number once the channel has been collecting for
+            # `min_sample_seconds` (or has real messages); otherwise it is
+            # "not measured yet" and shows a dash instead of a false 0%.
+            elapsed = now - self._joined_at.get(login, now)
+            measured = collecting and (elapsed >= self.min_sample_seconds or chatters > 0)
+            chatters = chatters if measured else None
             contribution = None
             if chatters is not None and item["viewers"] > 0:
                 contribution = round(chatters / item["viewers"] * 100, 2)
@@ -321,6 +374,16 @@ class LeaderboardCollector:
             out["collecting"] = collecting
             streams.append(out)
 
+        # Highest contribution first; unmeasured streams last. Ties break on
+        # viewers so the ranking is stable and meaningful.
+        streams.sort(
+            key=lambda s: (
+                s["contribution"] is None,
+                -(s["contribution"] or 0),
+                -(s["viewers"] or 0),
+            )
+        )
+
         if self.app_ready and self.chat_ready:
             chat_status = "collecting"
         elif self.app_ready:
@@ -328,7 +391,7 @@ class LeaderboardCollector:
         else:
             chat_status = "app_not_configured"
 
-        return {
+        payload = {
             "ok": True,
             "streams": streams,
             "average_contribution": (
@@ -342,10 +405,15 @@ class LeaderboardCollector:
                 "status": chat_status,
                 "error": self.last_error,
                 "window_seconds": self.window_seconds,
+                "min_sample_seconds": self.min_sample_seconds,
                 "streams_joined": len(joined),
                 "streams_tracked": len(self.streams),
             },
         }
+
+        self._snapshot_cache = payload
+        self._snapshot_cached_at = now
+        return payload
 
 
 class _IrcConnection:
@@ -386,6 +454,7 @@ class _IrcConnection:
                         await ws.send(f"PASS oauth:{self.token}")
                         await ws.send(f"NICK {self.username.lower()}")
                         await ws.send("JOIN " + ",".join(f"#{c}" for c in self.channels))
+                        self.collector.note_joined(self.channels)
                         log.info(
                             "Leaderboard IRC: joined %d channel(s)", len(self.channels)
                         )

@@ -280,6 +280,41 @@ async def set_auto_clip(request: Request):
     return {"ok": True, "auto_enabled": enabled}
 
 
+@app.post("/api/clip")
+async def make_clip(request: Request):
+    """Manual Clip now: starts a clip straight away and returns its record."""
+    await require_admin(request)
+    try:
+        clip = clip_manager.request_clip(source="manual")
+    except ClipError as exc:
+        raise ApiError(exc.status, "clip_failed", str(exc))
+    return {"ok": True, "clip": clip}
+
+
+@app.post("/api/clips/{uid}/download")
+async def download_clip(uid: str, request: Request):
+    """Streams the video file of a ready clip (the Save button)."""
+    await require_admin(request)
+    try:
+        url, name = await clip_manager.download_url(uid)
+    except ClipError as exc:
+        raise ApiError(exc.status, "clip_download", str(exc))
+
+    async def stream():
+        async with clip_manager.http.stream("GET", url) as response:
+            async for chunk in response.aiter_bytes():
+                yield chunk
+
+    return StreamingResponse(
+        stream(),
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 # ------------------------------------------------------------ Twitch sign-in
 
 @app.post("/api/auth/twitch/start")
