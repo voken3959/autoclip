@@ -50,6 +50,7 @@ class ViewerTracker:
         self.interval = _env_int("VIEWER_POLL_SECONDS", 60, 30, 300)
         self.store_path = Path(os.getenv("VIEWER_HISTORY_PATH", ".autoclip_viewers.json"))
         self._http = http
+        self._wake = asyncio.Event()    # set to poll again right away
 
         # (unix seconds, viewers) - viewers is None while the channel is offline
         self.samples: deque[tuple[int, int | None]] = deque()
@@ -82,6 +83,8 @@ class ViewerTracker:
     def _load(self):
         try:
             raw = json.loads(self.store_path.read_text(encoding="utf-8"))
+            if raw.get("channel") not in (None, self.channel):
+                return  # history of another channel
             cutoff = time.time() - DAY
             for stamp, viewers in raw.get("samples", []):
                 if isinstance(stamp, int) and stamp >= cutoff and (viewers is None or isinstance(viewers, int)):
@@ -94,10 +97,20 @@ class ViewerTracker:
     def _save(self):
         try:
             tmp = self.store_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"samples": list(self.samples)}), encoding="utf-8")
+            tmp.write_text(json.dumps({"channel": self.channel, "samples": list(self.samples)}), encoding="utf-8")
             os.replace(tmp, self.store_path)
         except OSError as exc:
             log.warning("Couldn't save viewer history: %s", exc)
+
+    def set_channel(self, channel: str):
+        """Watch another channel: its history starts empty."""
+        self.channel = channel.strip().lstrip("#").lower()
+        self.samples.clear()
+        self.live, self.count, self.started_at = False, None, None
+        self.status, self.error = "starting", None
+        self.version += 1
+        self._save()
+        self._wake.set()
 
     # ------------------------------------------------------------ credentials
 
@@ -142,9 +155,12 @@ class ViewerTracker:
 
     async def poll(self):
         headers = await self._headers()
+        channel = self.channel
         response = await self.http.get(
-            f"{API}/streams", params={"user_login": self.channel}, headers=headers
+            f"{API}/streams", params={"user_login": channel}, headers=headers
         )
+        if channel != self.channel:
+            return  # the channel was switched while Twitch was answering
 
         code = response.status_code
         if code == 401:
@@ -197,7 +213,11 @@ class ViewerTracker:
             except Exception:
                 log.exception("Viewer count crashed")
                 self.status, self.error = "error", "Something went wrong asking Twitch."
-            await asyncio.sleep(self.interval)
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=self.interval)
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
 
     # ---------------------------------------------------------------- output
 
