@@ -115,6 +115,24 @@ body.hot .glow { opacity: 1; }
     border-left: 1px solid var(--line-soft);
     min-width: 0;
 }
+.channel-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    margin: -4px -8px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    min-width: 0;
+}
+.channel-btn svg { color: var(--faint); flex: none; transition: color 0.2s; }
+.channel-btn:hover svg, .channel-btn:focus-visible svg { color: var(--lav); }
+.channel-btn:hover { background: rgba(255, 255, 255, 0.05); }
+.channel-btn:focus-visible { outline: 2px solid var(--lav); outline-offset: 2px; }
 .channel-name { font-weight: 600; }
 .channel-name::before { content: "#"; color: var(--faint); margin-right: 1px; }
 
