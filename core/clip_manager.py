@@ -83,6 +83,13 @@ class ClipManager:
 
     # ------------------------------------------------------------------ setup
 
+    def set_channel(self, channel: str) -> None:
+        """The watched channel was switched."""
+        self.channel = channel.lower()
+        self._looked_up_id = ""
+        self.last_error = None
+        self.title = (os.getenv("CLIP_TITLE", "").strip() or self.channel or "AutoClip")[:100]
+
     @property
     def http(self) -> httpx.AsyncClient:
         if self._http is None:
