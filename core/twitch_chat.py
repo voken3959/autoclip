@@ -17,6 +17,18 @@ class TwitchChatClient:
         self.on_room_id = on_room_id
         self.websocket = None
 
+    async def set_channel(self, channel: str):
+        """Move to another channel: drop the connection so run() rejoins."""
+        channel = channel.lower()
+        if channel == self.channel:
+            return
+        self.channel = channel
+        if self.websocket:
+            try:
+                await self.websocket.close()
+            except Exception:
+                pass  # run() reconnects either way
+
     @property
     def ready(self):
         return bool(self.username and self.token and self.channel)
@@ -58,11 +70,16 @@ class TwitchChatClient:
             elif line.startswith(":tmi.twitch.tv RECONNECT"):
                 return False
             elif " PRIVMSG #" in line:
+                # Late lines from the channel we just left are dropped.
+                if f" PRIVMSG #{self.channel} " not in line:
+                    continue
                 parsed = self._parse_privmsg(line)
                 if parsed:
                     self._note_room_id(parsed.pop("room_id", ""))
                     self.monitor.add_message(parsed)
             elif " ROOMSTATE #" in line:
+                if not line.rstrip().endswith(f" ROOMSTATE #{self.channel}"):
+                    continue
                 self._note_room_id(self._parse_tags(line).get("room-id", ""))
         return True
 
