@@ -18,16 +18,29 @@ class TwitchChatClient:
         self.websocket = None
 
     async def set_channel(self, channel: str):
-        """Move to another channel: drop the connection so run() rejoins."""
+        """Move to another channel on the live connection (PART old, JOIN new).
+
+        If the connection is already gone, run() joins the new channel when it
+        reconnects. If the swap fails, the connection is dropped so run()
+        reconnects straight into the new channel.
+        """
         channel = channel.lower()
         if channel == self.channel:
             return
-        self.channel = channel
-        if self.websocket:
+        old, self.channel = self.channel, channel
+        ws = self.websocket
+        if ws is None:
+            return
+        try:
+            await ws.send(f"PART #{old}")
+            await ws.send(f"JOIN #{channel}")
+            log.info("Chat moved from #%s to #%s", old, channel)
+        except Exception as exc:
+            log.warning("Couldn't move chat to #%s (%s); reconnecting", channel, exc)
             try:
-                await self.websocket.close()
+                await ws.close()
             except Exception:
-                pass  # run() reconnects either way
+                pass
 
     @property
     def ready(self):
@@ -49,9 +62,11 @@ class TwitchChatClient:
                     async for raw in ws:
                         if not await self._handle_frame(ws, raw):
                             break  # Twitch asked us to reconnect
+                self.websocket = None
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self.websocket = None
                 log.exception("Twitch chat connection failed")
                 self.monitor.set_connection("error", str(exc))
                 await asyncio.sleep(5)
