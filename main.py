@@ -1,7 +1,9 @@
 import asyncio
 import hmac
 import logging
+import json
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,18 +30,60 @@ from dashboard.page import PAGE
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("autoclip")
 
-CHANNEL = os.getenv("TWITCH_CHANNEL", "jynxzi").strip().lstrip("#")
 CALLBACK_PATH = "/auth/twitch/callback"
 
-monitor = Monitor()
+# The channel can be changed from the dashboard. The choice is saved to a small
+# file so it survives restarts; TWITCH_CHANNEL is the starting/default channel.
+DEFAULT_CHANNEL = os.getenv("TWITCH_CHANNEL", "jynxzi").strip().lstrip("#").lower()
+CHANNEL_STORE = Path(os.getenv("CHANNEL_STORE_PATH", ".autoclip_channel.json"))
+CHANNEL_RE = re.compile(r"^[a-z0-9_]{1,25}$")
+
+
+def normalize_channel(value) -> str:
+    """'#Name', '@name' or a twitch.tv link -> 'name' (empty if it isn't valid)."""
+    text = str(value or "").strip().lower()
+    text = re.sub(r"^https?://", "", text)
+    text = re.sub(r"^(www\.|m\.)?twitch\.tv/", "", text)
+    text = text.split("/")[0].split("?")[0].lstrip("#@")
+    return text if CHANNEL_RE.match(text) else ""
+
+
+def load_saved_channel() -> str:
+    try:
+        saved = json.loads(CHANNEL_STORE.read_text(encoding="utf-8")).get("channel")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return normalize_channel(saved)
+
+
+def save_channel(name: str) -> None:
+    try:
+        tmp = CHANNEL_STORE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"channel": name}), encoding="utf-8")
+        os.replace(tmp, CHANNEL_STORE)
+    except OSError as exc:
+        log.warning("Couldn't save the channel choice: %s", exc)
+
+
+CHANNEL = load_saved_channel() or DEFAULT_CHANNEL
+
+
+def env_broadcaster_id() -> str:
+    """TWITCH_BROADCASTER_ID only describes the TWITCH_CHANNEL channel."""
+    if CHANNEL != DEFAULT_CHANNEL:
+        return ""
+    return os.getenv("TWITCH_BROADCASTER_ID", "").strip()
+
+
+monitor = Monitor(CHANNEL)
 auth = TwitchAuth()
 # TWITCH_BROADCASTER_ID (if set) is used straight away; otherwise the channel's
 # ID is read from Twitch chat once we have joined it (also used for 7TV emotes).
-emotes = SevenTVEmotes(channel_id=os.getenv("TWITCH_BROADCASTER_ID", ""))
+emotes = SevenTVEmotes(channel_id=env_broadcaster_id())
 clip_manager = ClipManager(
     monitor,
     auth,
-    get_broadcaster_id=lambda: os.getenv("TWITCH_BROADCASTER_ID", "").strip() or emotes.channel_id,
+    get_broadcaster_id=lambda: env_broadcaster_id() or emotes.channel_id,
     channel=CHANNEL,
 )
 # Twitch badges shown next to usernames in the dashboard chat. The badge
@@ -50,7 +94,7 @@ badges = BadgeStore(
     client_secret=os.getenv("TWITCH_CLIENT_SECRET", "").strip(),
     get_channel_id=lambda: emotes.channel_id,
 )
-badges.set_channel_id(os.getenv("TWITCH_BROADCASTER_ID", "").strip())
+badges.set_channel_id(env_broadcaster_id())
 monitor.badges_resolver = badges.resolve
 
 
@@ -188,6 +232,34 @@ async def broadcast_loop():
         await asyncio.sleep(1)
 
 
+async def switch_channel(name: str) -> bool:
+    """Point everything at another Twitch channel. Returns False if unchanged."""
+    global CHANNEL
+    if name == CHANNEL:
+        return False
+    CHANNEL = name
+    save_channel(name)
+    log.info("Switching to #%s", name)
+
+    monitor.switch_channel(name)
+    viewers.set_channel(name)
+    emotes.reset_channel()
+    badges.reset_channel()
+    clip_manager.set_channel(name)
+    # Clipping needs permission on the channel being watched, so don't keep
+    # auto-clipping a channel nobody has checked it for.
+    clip_manager.auto_enabled = False
+
+    known_id = env_broadcaster_id()
+    if known_id:
+        note_room_id(known_id)
+    await chat_client.set_channel(name)
+
+    await broadcast({"type": "channel_changed", "channel": name})
+    await broadcast(snapshot())
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(broadcast_loop()))
@@ -297,6 +369,18 @@ async def websocket_endpoint(ws: WebSocket):
 async def admin_check(request: Request):
     await require_admin(request)
     return {"ok": True}
+
+
+@app.post("/api/channel")
+async def set_channel(request: Request):
+    """Change the watched Twitch channel (needs the admin key, like clipping)."""
+    await require_admin(request)
+    body = await read_json(request)
+    name = normalize_channel(body.get("channel"))
+    if not name:
+        raise ApiError(400, "bad_channel", "Enter a Twitch channel name, like jynxzi (letters, numbers and underscores).")
+    changed = await switch_channel(name)
+    return {"ok": True, "channel": CHANNEL, "changed": changed}
 
 
 @app.post("/api/auto-clip")
