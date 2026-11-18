@@ -345,6 +345,46 @@ function apiFailed(result) {
     if (result.code === "admin_key_not_set") openSetup();
 }
 
+// ---------------------------------------------------------- change channel
+
+(() => {
+    const dialog = $("channelDialog");
+    const form = $("channelForm");
+    const input = $("channelInput");
+    const error = $("channelError");
+    const submit = $("channelOk");
+
+    $("channelBtn").addEventListener("click", () => {
+        input.value = (S.snap && S.snap.channel) || "";
+        error.hidden = true;
+        openSheet(dialog);
+        setTimeout(() => { input.focus(); input.select(); }, 60);
+    });
+    $("channelCancel").addEventListener("click", () => closeSheet(dialog));
+
+    form.addEventListener("submit", async event => {
+        event.preventDefault();
+        const value = input.value.trim();
+        if (!value) return;
+        submit.disabled = true;
+        try {
+            const result = await api("/api/channel", { channel: value });
+            if (result.code === "cancelled") return;
+            if (!result.ok) {
+                error.textContent = result.error || "Couldn't change the channel.";
+                error.hidden = false;
+                restartAnimation(error, "shake");
+                if (result.code === "admin_key_not_set") { closeSheet(dialog); apiFailed(result); }
+                return;
+            }
+            closeSheet(dialog);
+            toast(result.changed ? "Now watching #" + result.channel : "Already watching #" + result.channel);
+        } finally {
+            submit.disabled = false;
+        }
+    });
+})();
+
 // -------------------------------------------------------------- the trace
 
 const trace = (() => {
@@ -2143,6 +2183,14 @@ function watchClips(clips) {
     }
 }
 
+// Another channel is being watched: drop everything that belonged to the old one.
+function onChannelChanged(data) {
+    renderChat([], true);
+    S.seenEvent = null;
+    S.clipStatus.clear();
+    if (data && data.channel) $("channel").textContent = data.channel;
+}
+
 function render(s) {
     const previous = S.snap;
     S.snap = s;
@@ -2272,6 +2320,7 @@ function connect() {
         try {
             const data = JSON.parse(event.data);
             if (data.type === "chat") addChatMessage(data.message);
+            else if (data.type === "channel_changed") onChannelChanged(data);
             else render(data);
         } catch (error) {
             console.error("Dashboard data error:", error);
