@@ -108,6 +108,15 @@ class SevenTVEmotes:
         self._rebuild()
         self._wake.set()
 
+    def reset_channel(self) -> None:
+        """Forget the current channel (the watched channel was switched)."""
+        self.channel_id = ""
+        self.channel_emotes = {}
+        self.channel_loaded = False
+        self.channel_found = False
+        self._rebuild()
+        self._wake.set()
+
     def status(self) -> str:
         if not self.global_loaded and not self.merged:
             return "error" if self.error else "loading"
