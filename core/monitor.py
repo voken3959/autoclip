@@ -71,7 +71,9 @@ class Monitor:
     def switch_channel(self, channel: str):
         """Forget the old channel's chat, baseline, spikes and clips."""
         self.channel = channel
+        status, error = self.connection_status, self.last_error
         self._reset_state()
+        self.connection_status, self.last_error = status, error
 
     def set_connection(self, status: str, error: str | None = None):
         self.connection_status = status
