@@ -20,7 +20,8 @@ def env_float(name: str, default: float) -> float:
 
 
 class Monitor:
-    def __init__(self):
+    def __init__(self, channel: str = ""):
+        self.channel = channel or os.getenv("TWITCH_CHANNEL", "jynxzi")
         self.calibration_seconds = env_int("CALIBRATION_SECONDS", 120)
         self.window_seconds = env_int("BASELINE_WINDOW_SECONDS", 300)
         self.update_seconds = env_int("BASELINE_UPDATE_SECONDS", 10)
@@ -29,6 +30,16 @@ class Monitor:
         self.confirm_seconds = env_int("SPIKE_CONFIRM_SECONDS", 3)
         self.cooldown_seconds = env_int("CLIP_COOLDOWN_SECONDS", 90)
 
+        # Everything that belongs to one watched channel lives in _reset_state,
+        # so switching channels can start again from a clean slate.
+        self.chat_message_id = 0
+        # Called with each new chat message the moment it arrives.
+        self.on_chat = None
+        # Optional: badges tag (str) -> list of badge dicts, set by main.
+        self.badges_resolver = None
+        self._reset_state()
+
+    def _reset_state(self):
         self.started_at = time.monotonic()
         self.second_counts = deque(
             maxlen=max(self.window_seconds, self.calibration_seconds) + 5
@@ -49,18 +60,18 @@ class Monitor:
         self.events = deque(maxlen=30)
         self.clips = deque(maxlen=30)
 
-        # Live chat storage
+        # Live chat storage (message IDs keep counting up across channels)
         self.chat_messages = deque(maxlen=100)
-        self.chat_message_id = 0
-        # Called with each new chat message the moment it arrives.
-        self.on_chat = None
-        # Optional: badges tag (str) -> list of badge dicts, set by main.
-        self.badges_resolver = None
 
         self.last_message_at = None
         self.connection_status = "connecting"
         self.last_error = None
         self.last_rate = 0.0
+
+    def switch_channel(self, channel: str):
+        """Forget the old channel's chat, baseline, spikes and clips."""
+        self.channel = channel
+        self._reset_state()
 
     def set_connection(self, status: str, error: str | None = None):
         self.connection_status = status
@@ -278,7 +289,7 @@ class Monitor:
         now = datetime.now(timezone.utc)
 
         data = {
-            "channel": os.getenv("TWITCH_CHANNEL", "jynxzi"),
+            "channel": self.channel,
             "connection": self.connection_status,
             "error": self.last_error,
             "phase": phase,
