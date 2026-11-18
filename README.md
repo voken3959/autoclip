@@ -138,6 +138,21 @@ known. Without the client keys, a static set of common badges is still shown.
 
 ## 7. VPS deployment
 
+## Viewer count and 24 hour graph
+
+The dashboard shows how many people are watching and a graph of the last 24 hours.
+Press (or tap) any point on the graph to read the viewer count at that time; use the
+arrow keys to step through points, and Escape to clear. Twitch only reports the count
+from now, so the app asks every minute (`VIEWER_POLL_SECONDS`) and builds the history
+itself. A gap in the line means the channel was offline or the app wasn't running.
+
+It needs Twitch keys: `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` (the same ones used
+for clipping). Without them the chat login is tried instead. The history is saved to
+`VIEWER_HISTORY_PATH`; hosts that wipe their disk on restart (Render's free plan does)
+start the graph again after each restart or redeploy.
+
+## 5. VPS deployment
+
 Do not expose this prototype directly to the public internet yet. Before VPS deployment,
 add HTTPS, a login system, secure secret storage, reverse-proxy configuration, and
 persistent database storage. The current prototype binds to localhost by default.

@@ -97,6 +97,39 @@ AutoClip
 <div class="stat"><dt>Clips saved</dt><dd><span class="num" id="sClips">0</span></dd></div>
 </dl>
 
+<section class="panel viewers enter-up up" style="--d:210ms" aria-labelledby="viewersTitle">
+<div class="panel-head">
+<h2 id="viewersTitle">Viewers</h2>
+<div class="panel-meta"><span class="chip" id="liveChip">Checking</span></div>
+</div>
+<div class="viewers-body">
+<div class="viewers-now">
+<div class="viewers-count"><span class="num" id="vNow">&mdash;</span></div>
+<div class="viewers-label" id="vLabel">Checking Twitch</div>
+<dl class="vfacts">
+<div><dt>Peak in 24 hours</dt><dd id="vPeak">&mdash;</dd></div>
+<div><dt>Average while live</dt><dd id="vAvg">&mdash;</dd></div>
+</dl>
+</div>
+<div class="vtrace" id="vtrace" tabindex="0" role="group"
+aria-label="Viewers over the last 24 hours. Use the left and right arrow keys to move through the points.">
+<canvas id="vcanvas" aria-hidden="true"></canvas>
+<div class="vtip" id="vtip"></div>
+<div class="vnote" id="vNote">Loading viewer history</div>
+</div>
+</div>
+<div class="vreadout" id="vReadout" aria-live="polite"></div>
+<details class="vtable">
+<summary>View as a table</summary>
+<div class="vtable-scroll">
+<table>
+<caption class="sr-only">Viewers for each hour of the last 24 hours</caption>
+<thead><tr><th scope="col">Hour</th><th scope="col">Average</th><th scope="col">Peak</th></tr></thead>
+<tbody id="vRows"></tbody>
+</table>
+</div>
+</details>
+</section>
 <div class="grid">
 <section class="panel chat-panel enter-up up" style="--d:250ms" aria-labelledby="chatTitle">
 <div class="panel-head">

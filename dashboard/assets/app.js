@@ -710,6 +710,559 @@ const trace = (() => {
     return { start: start, update: update };
 })();
 
+// ---------------------------------------------------------------- viewers
+
+const viewerBoard = (() => {
+    const DAY_MS = 24 * 3600 * 1000;
+    const wrap = $("vtrace");
+    const canvas = $("vcanvas");
+    const ctx = canvas.getContext("2d");
+    const tip = $("vtip");
+    const note = $("vNote");
+    const readout = $("vReadout");
+
+    const styles = getComputedStyle(document.documentElement);
+    const token = name => styles.getPropertyValue(name).trim();
+    const C = {
+        lav: token("--lav"),
+        text: token("--text"),
+        muted: token("--muted"),
+        faint: token("--faint"),
+        soft: token("--line-soft"),
+        line: token("--line"),
+        panel: token("--ink-2"),
+    };
+    const pad = { l: 46, r: 14, t: 24, b: 26 };
+
+    let W = 1, H = 1;
+    let samples = [];              // { t: milliseconds, v: viewers, or null while offline }
+    let interval = 60000;
+    let status = "starting";       // the server's state when the history was last loaded
+    let errorText = "";
+    let version = null;
+    let loaded = false;
+    let loading = false;
+    let loadFailed = false;
+    let retryAt = 0;
+    let hoverX = null;
+    let pinned = null;             // the time (ms) that was pressed
+    let dragged = false;
+    let reveal = 1;
+    let revealStarted = false;
+    let frameRequested = false;
+    let lastFrame = 0;
+    let tipKey = "";
+
+    const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+    const gapMs = () => interval * 2.5;
+    const clock = ms => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const when = ms => new Date(ms).toLocaleString([], {
+        weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+    });
+
+    function hexA(hex, alpha) {
+        let h = hex.replace("#", "");
+        if (h.length === 3) h = h.split("").map(c => c + c).join("");
+        const n = parseInt(h, 16);
+        return "rgba(" + (n >> 16 & 255) + "," + (n >> 8 & 255) + "," + (n & 255) + "," + alpha + ")";
+    }
+
+    function abbreviate(n) {
+        if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+        if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "K";
+        return String(Math.round(n));
+    }
+
+    function niceMax(max) {
+        if (max <= 0) return 10;
+        const magnitude = Math.pow(10, Math.floor(Math.log10(max)));
+        for (const k of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+            if (k * magnitude >= max * 1.05) return Math.max(4, k * magnitude);
+        }
+        return Math.max(4, 10 * magnitude);
+    }
+
+    // ------------------------------------------------------------------ data
+
+    function inWindow() {
+        const from = Date.now() - DAY_MS;
+        return samples.filter(s => s.t >= from);
+    }
+
+    function lookup(t) {
+        let best = null;
+        let distance = Infinity;
+        for (const s of inWindow()) {
+            const d = Math.abs(s.t - t);
+            if (d < distance) { best = s; distance = d; }
+        }
+        if (!best || distance > gapMs()) return { t: t, gap: true, v: null };
+        return { t: best.t, gap: false, v: best.v };
+    }
+
+    function geometry() {
+        const t1 = Date.now();
+        const t0 = t1 - DAY_MS;
+        const left = pad.l, right = W - pad.r, top = pad.t, bottom = H - pad.b;
+        let max = 0;
+        for (const s of samples) if (s.v !== null && s.t >= t0 && s.v > max) max = s.v;
+        const yMax = niceMax(max);
+        return {
+            t0: t0, t1: t1, left: left, right: right, top: top, bottom: bottom, yMax: yMax,
+            xOf: t => left + (t - t0) / DAY_MS * (right - left),
+            tOf: x => t0 + (x - left) / (right - left) * DAY_MS,
+            yOf: v => bottom - v / yMax * (bottom - top),
+        };
+    }
+
+    async function load() {
+        if (loading) return;
+        loading = true;
+        try {
+            const response = await fetch(BACKEND + "/api/viewers", { cache: "no-store" });
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            const data = await response.json();
+
+            status = data.status;
+            errorText = data.error || "";
+            interval = (data.interval || 60) * 1000;
+            version = data.version;
+            samples = (data.samples || []).map(pair => ({ t: pair[0] * 1000, v: pair[1] }));
+            loaded = true;
+            loadFailed = false;
+            retryAt = 0;
+
+            if (!revealStarted && samples.length) {
+                revealStarted = true;
+                reveal = reduced() ? 1 : 0;
+            }
+            renderState();
+            renderFacts();
+            renderTable();
+            renderReadout();
+            schedule();
+        } catch (error) {
+            console.error("Viewer history error:", error);
+            loadFailed = true;
+            retryAt = Date.now() + 15000;
+            renderState();
+        } finally {
+            loading = false;
+        }
+    }
+
+    // ---------------------------------------------------------------- panels
+
+    function renderState() {
+        const hasViewers = samples.some(s => s.v !== null);
+        let message = "";
+
+        if (!loaded) {
+            message = loadFailed ? "Couldn't load the viewer history. Trying again." : "Loading viewer history";
+        } else if (status === "needs_keys" && !samples.length) {
+            message = "Viewer counts come from Twitch. Add TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET to your server settings (the same keys clipping uses), then redeploy.";
+        } else if (!samples.length) {
+            message = status === "error" && errorText
+                ? errorText + " Trying again."
+                : "Collecting viewer counts. The first point appears within a minute.";
+        } else if (!hasViewers) {
+            message = "The channel hasn't been live in the last 24 hours.";
+        }
+
+        note.textContent = message;
+        note.hidden = message === "";
+    }
+
+    function renderFacts() {
+        const live = inWindow().filter(s => s.v !== null);
+        const peakEl = $("vPeak");
+        const avgEl = $("vAvg");
+
+        if (!live.length) {
+            peakEl.textContent = "—";
+            avgEl.textContent = "—";
+            return;
+        }
+        let peak = live[0];
+        let sum = 0;
+        for (const s of live) {
+            if (s.v > peak.v) peak = s;
+            sum += s.v;
+        }
+        peakEl.replaceChildren(document.createTextNode(fmt(peak.v)), el("small", "", "at " + clock(peak.t)));
+        avgEl.textContent = fmt(Math.round(sum / live.length));
+    }
+
+    function renderTable() {
+        const body = $("vRows");
+        body.replaceChildren();
+
+        const start = new Date();
+        start.setMinutes(0, 0, 0);
+        for (let i = 0; i < 24; i++) {
+            const from = new Date(start);
+            from.setHours(start.getHours() - i);
+            const t0 = from.getTime();
+            const values = samples.filter(s => s.v !== null && s.t >= t0 && s.t < t0 + 3600000).map(s => s.v);
+
+            const row = document.createElement("tr");
+            const label = document.createElement("th");
+            label.scope = "row";
+            label.textContent = from.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+            const average = el("td", "", values.length ? fmt(Math.round(values.reduce((a, b) => a + b, 0) / values.length)) : "—");
+            const peak = el("td", "", values.length ? fmt(Math.max.apply(null, values)) : "—");
+            row.append(label, average, peak);
+            body.appendChild(row);
+        }
+    }
+
+    function renderReadout() {
+        readout.replaceChildren();
+        readout.classList.toggle("pinned", pinned !== null);
+
+        if (pinned === null) {
+            if (loaded && inWindow().some(s => s.v !== null)) {
+                readout.appendChild(document.createTextNode("Press the graph to see the viewer count at that time."));
+            }
+            return;
+        }
+
+        const info = lookup(pinned);
+        let value;
+        if (info.gap) value = "No data";
+        else if (info.v === null) value = "Offline";
+        else value = fmt(info.v) + (info.v === 1 ? " viewer" : " viewers");
+
+        const text = el(
+            "span", "when",
+            when(info.t) + (info.gap ? ". The channel was offline or the dashboard wasn't running." : "")
+        );
+        const clear = el("button", "btn small", "Clear");
+        clear.type = "button";
+        clear.addEventListener("click", () => {
+            pinned = null;
+            renderReadout();
+            schedule();
+        });
+        readout.append(el("strong", "", value), text, clear);
+    }
+
+    // The number and badge at the top of the panel, from each live update.
+    function update(v) {
+        if (!v) return;
+        let chipText = "Offline", chipKind = "", label = "The channel is offline";
+        if (v.status === "starting") {
+            chipText = "Checking"; chipKind = "live"; label = "Checking Twitch";
+        } else if (v.status === "needs_keys" && !v.live) {
+            chipText = "Not connected"; chipKind = "warn"; label = "No viewer data yet";
+        } else if (v.status === "error") {
+            chipText = "Twitch unreachable"; chipKind = "warn";
+            label = v.live ? "Last known count" : "Couldn't reach Twitch";
+        } else if (v.live) {
+            chipText = "Live"; chipKind = "ok"; label = "watching now";
+        }
+
+        const chip = $("liveChip");
+        if (chip.textContent !== chipText) {
+            chip.className = "chip " + chipKind;
+            chip.textContent = chipText;
+        }
+        if ($("vLabel").textContent !== label) $("vLabel").textContent = label;
+        tween($("vNow"), v.live ? v.count : null, 0, 900);
+
+        if (!loaded || v.version !== version || v.status !== status) {
+            if (!loading && Date.now() >= retryAt) load();
+        }
+    }
+
+    // ------------------------------------------------------------------ draw
+
+    function schedule() {
+        if (frameRequested) return;
+        frameRequested = true;
+        requestAnimationFrame(frame);
+    }
+
+    function frame(now) {
+        frameRequested = false;
+        const dt = Math.min(64, now - (lastFrame || now));
+        lastFrame = now;
+        if (reveal < 1) {
+            reveal = reduced() ? 1 : Math.min(1, reveal + dt / 900);
+            if (reveal < 1) schedule();
+        }
+        draw();
+    }
+
+    function resize() {
+        const box = wrap.getBoundingClientRect();
+        W = Math.max(1, Math.round(box.width));
+        H = Math.max(1, Math.round(box.height));
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(W * dpr);
+        canvas.height = Math.round(H * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        schedule();
+    }
+
+    function cursor(g, x, y, strong) {
+        ctx.strokeStyle = hexA(C.text, strong ? 0.55 : 0.28);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x) + 0.5, g.top - 6);
+        ctx.lineTo(Math.round(x) + 0.5, g.bottom);
+        ctx.stroke();
+        if (y === null) return;
+        ctx.beginPath();
+        ctx.arc(x, y, strong ? 6 : 5, 0, Math.PI * 2);
+        ctx.fillStyle = C.panel;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, y, strong ? 4 : 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = C.lav;
+        ctx.fill();
+    }
+
+    function showTip(g, x, y, info) {
+        const key = info.t + "|" + info.v + "|" + info.gap;
+        if (key !== tipKey) {
+            tipKey = key;
+            tip.replaceChildren();
+            const line = el("div");
+            if (info.gap) line.appendChild(el("span", "", "No data"));
+            else if (info.v === null) line.appendChild(el("b", "", "Offline"));
+            else line.append(el("b", "", fmt(info.v)), el("span", "", info.v === 1 ? "viewer" : "viewers"));
+            tip.append(line, el("span", "when", when(info.t)));
+        }
+        const width = tip.offsetWidth;
+        const height = tip.offsetHeight;
+        tip.style.left = clamp(x - width / 2, 4, W - width - 4) + "px";
+        tip.style.top = (y === null ? g.top + 6 : Math.max(4, y - height - 14)) + "px";
+        tip.classList.add("show");
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+        if (!loaded) {
+            tip.classList.remove("show");
+            return;
+        }
+
+        const g = geometry();
+
+        // Recessive grid with a few labels on the value axis.
+        ctx.font = "12px " + UI_FONT;
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        for (const fraction of [0, 0.5, 1]) {
+            const y = Math.round(g.yOf(g.yMax * fraction)) + 0.5;
+            ctx.strokeStyle = fraction === 0 ? C.line : C.soft;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(g.left, y);
+            ctx.lineTo(g.right, y);
+            ctx.stroke();
+            ctx.fillStyle = C.faint;
+            ctx.fillText(abbreviate(g.yMax * fraction), g.left - 8, y);
+        }
+
+        // Time axis: a label every six hours on the local clock.
+        ctx.textAlign = "center";
+        ctx.textBaseline = "alphabetic";
+        const tick = new Date(g.t0);
+        tick.setMinutes(0, 0, 0);
+        for (let guard = 0; guard < 30 && (tick.getHours() % 6 !== 0 || tick.getTime() < g.t0); guard++) {
+            tick.setHours(tick.getHours() + 1);
+        }
+        for (let guard = 0; guard < 8 && tick.getTime() <= g.t1; guard++, tick.setHours(tick.getHours() + 6)) {
+            const x = g.xOf(tick.getTime());
+            if (x < g.left + 14 || x > g.right - 14) continue;
+            ctx.strokeStyle = C.line;
+            ctx.beginPath();
+            ctx.moveTo(Math.round(x) + 0.5, g.bottom);
+            ctx.lineTo(Math.round(x) + 0.5, g.bottom + 4);
+            ctx.stroke();
+            const midnight = tick.getHours() === 0;
+            ctx.fillStyle = midnight ? C.muted : C.faint;
+            ctx.fillText(
+                midnight ? tick.toLocaleDateString([], { weekday: "short" }) : clock(tick.getTime()),
+                x, H - 7
+            );
+        }
+
+        // The line, broken wherever the channel was offline or there is no data.
+        const segments = [];
+        let current = [];
+        for (const s of samples) {
+            if (s.t < g.t0) continue;
+            if (s.v === null) {
+                if (current.length) segments.push(current);
+                current = [];
+                continue;
+            }
+            if (current.length && s.t - current[current.length - 1].t > gapMs()) {
+                segments.push(current);
+                current = [];
+            }
+            current.push({ t: s.t, v: s.v, x: g.xOf(s.t), y: g.yOf(s.v) });
+        }
+        if (current.length) segments.push(current);
+
+        const eased = 1 - Math.pow(1 - reveal, 3);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, g.left + (W - g.left) * eased, H);
+        ctx.clip();
+
+        const fill = ctx.createLinearGradient(0, g.top, 0, g.bottom);
+        fill.addColorStop(0, hexA(C.lav, 0.32));
+        fill.addColorStop(1, hexA(C.lav, 0));
+
+        for (const seg of segments) {
+            if (seg.length === 1) {
+                ctx.beginPath();
+                ctx.arc(seg[0].x, seg[0].y, 2.5, 0, Math.PI * 2);
+                ctx.fillStyle = C.lav;
+                ctx.fill();
+                continue;
+            }
+            ctx.beginPath();
+            ctx.moveTo(seg[0].x, g.bottom);
+            for (const p of seg) ctx.lineTo(p.x, p.y);
+            ctx.lineTo(seg[seg.length - 1].x, g.bottom);
+            ctx.closePath();
+            ctx.fillStyle = fill;
+            ctx.fill();
+
+            ctx.beginPath();
+            seg.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+            ctx.lineWidth = 2;
+            ctx.lineJoin = "round";
+            ctx.lineCap = "round";
+            ctx.strokeStyle = C.lav;
+            ctx.stroke();
+        }
+        ctx.restore();
+
+        // Label the busiest moment, and mark where the line is right now.
+        if (reveal >= 1 && segments.length) {
+            let peak = null;
+            for (const seg of segments) for (const p of seg) if (!peak || p.v > peak.v) peak = p;
+            ctx.font = "600 12px " + UI_FONT;
+            ctx.textAlign = "center";
+            ctx.fillStyle = C.muted;
+            ctx.fillText(abbreviate(peak.v), clamp(peak.x, g.left + 14, g.right - 14), Math.max(12, peak.y - 9));
+
+            const lastSeg = segments[segments.length - 1];
+            const end = lastSeg[lastSeg.length - 1];
+            if (g.t1 - end.t <= gapMs()) {
+                ctx.beginPath();
+                ctx.arc(end.x, end.y, 5, 0, Math.PI * 2);
+                ctx.fillStyle = C.panel;
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(end.x, end.y, 3.2, 0, Math.PI * 2);
+                ctx.fillStyle = C.lav;
+                ctx.fill();
+            }
+        }
+
+        // Hover read-out (the line under the pointer) and the pressed point.
+        let tipShown = false;
+        if (hoverX !== null) {
+            const info = lookup(g.tOf(clamp(hoverX, g.left, g.right)));
+            const x = info.gap ? clamp(hoverX, g.left, g.right) : g.xOf(info.t);
+            const y = info.gap || info.v === null ? null : g.yOf(info.v);
+            cursor(g, x, y, false);
+            showTip(g, x, y, info);
+            tipShown = true;
+        }
+        if (pinned !== null) {
+            const info = lookup(pinned);
+            const x = g.xOf(info.t);
+            if (x >= g.left - 1 && x <= g.right + 1) {
+                cursor(g, x, info.gap || info.v === null ? null : g.yOf(info.v), true);
+            }
+        }
+        if (!tipShown) tip.classList.remove("show");
+    }
+
+    // ----------------------------------------------------------- interaction
+
+    const xOfEvent = event => event.clientX - wrap.getBoundingClientRect().left;
+
+    function pressAt(x, toggle) {
+        const g = geometry();
+        const info = lookup(g.tOf(clamp(x, g.left, g.right)));
+        pinned = toggle && pinned !== null && Math.abs(pinned - info.t) < 1000 ? null : info.t;
+        renderReadout();
+        schedule();
+    }
+
+    wrap.addEventListener("pointerdown", () => { dragged = false; });
+    wrap.addEventListener("pointermove", event => {
+        const x = xOfEvent(event);
+        if (event.buttons === 1) {
+            dragged = true;
+            pressAt(x, false);
+        } else if (event.pointerType !== "touch") {
+            hoverX = x;
+        }
+        schedule();
+    });
+    wrap.addEventListener("pointerleave", () => {
+        hoverX = null;
+        schedule();
+    });
+    wrap.addEventListener("click", event => {
+        if (dragged) {
+            dragged = false;
+            return;
+        }
+        pressAt(xOfEvent(event), true);
+    });
+
+    // Arrow keys step through the points, so the graph works without a pointer.
+    wrap.addEventListener("keydown", event => {
+        const points = inWindow().filter(s => s.v !== null);
+        if (!points.length) return;
+
+        if (event.key === "Escape") {
+            pinned = null;
+        } else {
+            let index = points.length - 1;
+            if (pinned !== null) {
+                let best = Infinity;
+                points.forEach((s, i) => {
+                    const d = Math.abs(s.t - pinned);
+                    if (d < best) { best = d; index = i; }
+                });
+            }
+            const jump = event.shiftKey ? 15 : 1;
+            if (event.key === "ArrowLeft") index -= pinned === null ? 0 : jump;
+            else if (event.key === "ArrowRight") index += pinned === null ? 0 : jump;
+            else if (event.key === "Home") index = 0;
+            else if (event.key === "End") index = points.length - 1;
+            else return;
+            pinned = points[clamp(index, 0, points.length - 1)].t;
+        }
+        event.preventDefault();
+        renderReadout();
+        schedule();
+    });
+
+    function start() {
+        resize();
+        new ResizeObserver(resize).observe(wrap);
+        renderState();
+        renderReadout();
+        // The 24 hour window keeps moving even when no new sample has arrived.
+        setInterval(() => { if (!document.hidden) schedule(); }, 30000);
+    }
+
+    return { start: start, update: update };
+})();
+
 // ------------------------------------------------------------------- 7TV
 
 let sevenTVEmotes = new Map();
@@ -1639,6 +2192,7 @@ function render(s) {
     tween($("sClips"), (s.clips || []).filter(clip => clip.status === "ready").length, 0, 600);
 
     trace.update(s);
+    viewerBoard.update(s.viewers);
 
     // Announce a new spike once, never the ones that were already there.
     const newest = (s.events || [])[0];
@@ -1924,6 +2478,7 @@ function handleSignInResult() {
 }
 
 trace.start();
+viewerBoard.start();
 renderChat([], false);
 loadSevenTVEmotes();
 connect();

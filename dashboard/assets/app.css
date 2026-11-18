@@ -1079,4 +1079,118 @@ dialog.sheet::backdrop { background: rgba(8, 7, 24, 0.7); animation: fade 0.3s; 
     .leaderboard-summary > div { padding: 13px 16px; }
     .leaderboard-summary strong { font-size: 23px; }
     .leaderboard-toolbar { align-items: flex-start; flex-direction: column; padding: 17px; }
+
+/* ------------------------------------------------------------------ viewers */
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.viewers { margin-bottom: 20px; }
+
+.viewers-body {
+    display: grid;
+    grid-template-columns: minmax(190px, 250px) minmax(0, 1fr);
+    gap: 10px 30px;
+    padding: 18px 20px 4px;
+}
+.viewers-now { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.viewers-count {
+    font: 700 clamp(44px, 5.4vw, 64px)/1 var(--display);
+    letter-spacing: -0.035em;
+    font-variant-numeric: tabular-nums;
+}
+.viewers-label { margin-top: 6px; color: var(--muted); font-size: 14px; }
+.vfacts { margin: 16px 0 0; display: grid; gap: 6px; }
+.vfacts div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 14px; }
+.vfacts dt { color: var(--muted); }
+.vfacts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.vfacts dd small { margin-left: 6px; font-weight: 400; color: var(--faint); }
+
+.vtrace {
+    position: relative;
+    height: clamp(170px, 24vh, 230px);
+    cursor: crosshair;
+    touch-action: pan-y;
+    border-radius: 8px;
+}
+.vtrace canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.vtip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    padding: 7px 11px;
+    border-radius: 9px;
+    background: var(--raise);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.15s, transform 0.15s var(--ease);
+    z-index: 2;
+}
+.vtip.show { opacity: 1; transform: none; }
+.vtip b { font: 700 16px var(--display); margin-right: 4px; font-variant-numeric: tabular-nums; }
+.vtip span { color: var(--muted); }
+.vtip .when { display: block; color: var(--muted); }
+.vnote {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 0 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
+    pointer-events: none;
+}
+.vnote[hidden] { display: none; }
+.vnote b { color: var(--text); font-weight: 600; }
+
+.vreadout {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    min-height: 54px;
+    margin-top: 6px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--line-soft);
+    color: var(--muted);
+    font-size: 14px;
+}
+.vreadout strong { font: 600 20px/1.2 var(--display); color: var(--text); font-variant-numeric: tabular-nums; }
+.vreadout .when { color: var(--muted); }
+.vreadout.pinned { animation: swap 0.3s var(--ease); }
+.vreadout .btn { margin-left: auto; }
+
+.vtable { border-top: 1px solid var(--line-soft); font-size: 14px; }
+.vtable summary { padding: 11px 20px; cursor: pointer; color: var(--muted); user-select: none; }
+.vtable summary:hover { color: var(--text); }
+.vtable-scroll { max-height: 260px; overflow: auto; padding: 0 20px 14px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.vtable table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.vtable th, .vtable td { padding: 7px 0; text-align: right; border-top: 1px solid var(--line-soft); }
+.vtable th:first-child, .vtable td:first-child { text-align: left; }
+.vtable th { font-weight: 500; color: var(--muted); }
+
+@media (max-width: 760px) {
+    .viewers-body { grid-template-columns: 1fr; padding: 16px 16px 4px; }
+    .viewers-now { display: grid; grid-template-columns: auto 1fr; align-items: end; gap: 0 14px; }
+    .viewers-label { margin: 0 0 6px; align-self: end; }
+    .vfacts { grid-column: 1 / -1; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-top: 12px; }
+    .vfacts div { flex-direction: column; gap: 0; }
+    .vreadout, .vtable summary { padding-left: 16px; padding-right: 16px; }
+    .vtable-scroll { padding: 0 16px 14px; }
 }

@@ -22,6 +22,7 @@ from core.clip_manager import ClipError, ClipManager
 from core.emotes import SevenTVEmotes
 from core.leaderboard import LeaderboardCollector
 from core.badges import BadgeStore
+from core.viewers import ViewerTracker
 from dashboard.page import PAGE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -59,6 +60,7 @@ def note_room_id(room_id: str) -> None:
     badges.set_channel_id(room_id)
 
 
+viewers = ViewerTracker(CHANNEL)
 chat_client = TwitchChatClient(
     username=os.getenv("TWITCH_USERNAME", "").strip(),
     token=os.getenv("TWITCH_OAUTH_TOKEN", "").strip(),
@@ -101,6 +103,7 @@ def snapshot(include_chat: bool = True):
     data["emotes_version"] = emotes.version
     data["auto_clip_enabled"] = clip_manager.auto_enabled
     data["clipping"] = clip_manager.state(redirect_uri())
+    data["viewers"] = viewers.summary()
     return data
 
 
@@ -189,6 +192,7 @@ async def broadcast_loop():
 async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(broadcast_loop()))
     tasks.append(asyncio.create_task(emotes.run()))
+    tasks.append(asyncio.create_task(viewers.run()))
     tasks.append(asyncio.create_task(auth.run(clip_manager.http)))
     tasks.append(asyncio.create_task(leaderboard.run()))
     tasks.append(asyncio.create_task(badges.run()))
@@ -204,6 +208,7 @@ async def lifespan(app: FastAPI):
     await leaderboard.aclose()
     await badges.aclose()
     await clip_manager.aclose()
+    await viewers.aclose()
 
 
 app = FastAPI(title="AutoClip", lifespan=lifespan)
@@ -238,6 +243,12 @@ async def home():
 @app.get("/api/status")
 async def status():
     return snapshot()
+
+
+@app.get("/api/viewers")
+async def viewers_endpoint():
+    """The channel's viewer count and its last 24 hours, one sample a minute."""
+    return JSONResponse(viewers.payload(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/emotes")
