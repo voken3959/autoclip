@@ -153,6 +153,13 @@ class BadgeStore:
         self._channel = {}
         self._wake.set()
 
+    def reset_channel(self) -> None:
+        """Forget the current channel (the watched channel was switched)."""
+        self._channel_id = ""
+        self._channel = {}
+        self._last_channel_at = 0.0
+        self._wake.set()
+
     # ---------------------------------------------------------------- tokens
 
     async def _app_token(self) -> str:
