@@ -1125,6 +1125,7 @@ dialog.sheet::backdrop { background: rgba(8, 7, 24, 0.7); animation: fade 0.3s; 
     .leaderboard-summary > div { padding: 13px 16px; }
     .leaderboard-summary strong { font-size: 23px; }
     .leaderboard-toolbar { align-items: flex-start; flex-direction: column; padding: 17px; }
+}
 
 /* ------------------------------------------------------------------ viewers */
 

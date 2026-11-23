@@ -1036,8 +1036,9 @@ const viewerBoard = (() => {
 
     function resize() {
         const box = wrap.getBoundingClientRect();
-        W = Math.max(1, Math.round(box.width));
-        H = Math.max(1, Math.round(box.height));
+        // Capped so a layout problem can never make the canvas grow without end.
+        W = clamp(Math.round(box.width), 1, 4000);
+        H = clamp(Math.round(box.height), 1, 700);
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         canvas.width = Math.round(W * dpr);
         canvas.height = Math.round(H * dpr);
