@@ -1798,7 +1798,8 @@ async function saveClip(clip, button) {
     try {
         const result = await api("/api/clips/" + encodeURIComponent(clip.uid) + "/download", {}, true);
         if (!result.ok) {
-            apiFailed(result);
+            if (result.code === "cancelled") return;
+            toast(result.error || "Couldn't save the clip. Try again.", "err", { ttl: 20000 });
             return;
         }
         const blob = await result.response.blob();

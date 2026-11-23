@@ -451,10 +451,13 @@ class ClipManager:
                 content=json.dumps(operations),
                 headers={"Client-ID": WEB_CLIENT_ID, "Content-Type": "text/plain;charset=UTF-8"},
             )
-        except httpx.HTTPError:
-            raise ClipError("Couldn't reach Twitch's website servers.")
+        except httpx.HTTPError as exc:
+            raise ClipError(f"Couldn't reach Twitch's website servers ({exc.__class__.__name__}).")
         if response.status_code != 200:
-            raise ClipError(f"Twitch's website servers answered with error {response.status_code}.")
+            raise ClipError(
+                f"Twitch's website servers answered with error {response.status_code}"
+                f" ({response.text[:120].strip() or 'no details'})."
+            )
 
         try:
             result = response.json()[0]
@@ -462,8 +465,10 @@ class ClipManager:
         except (ValueError, IndexError, KeyError, AttributeError, TypeError):
             raise ClipError("Twitch's website servers sent something unexpected.")
         if not clip_data:
-            if result.get("errors"):
-                raise ClipError("Twitch has changed its website, so this way of saving needs an update.")
+            errors = result.get("errors") or []
+            if errors:
+                detail = str((errors[0] or {}).get("message") or "")[:120]
+                raise ClipError(f"Twitch's website servers refused the request ({detail or 'no details'}).")
             raise ClipError("Twitch doesn't have this clip any more.")
 
         access = clip_data.get("playbackAccessToken") or {}
@@ -498,8 +503,9 @@ class ClipManager:
         except ImportError:
             raise ClipError("The backup downloader (yt-dlp) isn't installed on the server.")
         except Exception as exc:
-            log.warning("yt-dlp couldn't find the clip: %s: %s", exc.__class__.__name__, str(exc)[:200])
-            raise ClipError("The backup downloader couldn't find the video file.")
+            reason = str(exc).replace("\n", " ")[:140]
+            log.warning("yt-dlp couldn't find the clip: %s: %s", exc.__class__.__name__, reason)
+            raise ClipError(f"The backup downloader couldn't find the video file ({reason or exc.__class__.__name__}).")
 
     async def _official_download(self, clip: dict) -> str:
         """Twitch's own download link (channel owner and editors only)."""
