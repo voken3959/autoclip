@@ -412,14 +412,30 @@ async def download_clip(uid: str, request: Request):
     """Streams the video file of a ready clip (the Save button)."""
     await require_admin(request)
     try:
-        url, name = await clip_manager.download_url(uid)
+        url, name, extra_headers = await clip_manager.download_url(uid)
     except ClipError as exc:
         raise ApiError(exc.status, "clip_download", str(exc))
 
+    # Open the video first, so a refusal is reported as a message instead of
+    # being saved as a broken .mp4 file.
+    try:
+        upstream = await clip_manager.http.send(
+            clip_manager.http.build_request("GET", url, headers=extra_headers or None),
+            stream=True,
+        )
+    except httpx.HTTPError:
+        raise ApiError(502, "clip_download", "Couldn't reach Twitch's video server. Try again in a moment.")
+    if upstream.status_code != 200:
+        status = upstream.status_code
+        await upstream.aclose()
+        raise ApiError(502, "clip_download", f"Twitch's video server refused the download (error {status}). Try again in a minute.")
+
     async def stream():
-        async with clip_manager.http.stream("GET", url) as response:
-            async for chunk in response.aiter_bytes():
+        try:
+            async for chunk in upstream.aiter_bytes():
                 yield chunk
+        finally:
+            await upstream.aclose()  # also runs if the browser stops the download
 
     return StreamingResponse(
         stream(),
@@ -427,6 +443,8 @@ async def download_clip(uid: str, request: Request):
         headers={
             "Content-Disposition": f'attachment; filename="{name}"',
             "Cache-Control": "no-store",
+            # A video is already compressed; stop the gzip layer wasting time on it.
+            "Content-Encoding": "identity",
         },
     )
 

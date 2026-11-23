@@ -1396,13 +1396,96 @@ const jump = $("jump");
 let lastChatId = null;
 let unseen = 0;
 
-function usernameColor(username) {
-    const colors = ["#ff7b9c", "#a78bfa", "#60a5fa", "#34d399", "#fbbf24", "#fb923c", "#e879f9", "#2dd4bf"];
-    let hash = 0;
-    for (let i = 0; i < username.length; i++) {
-        hash = username.charCodeAt(i) + ((hash << 5) - hash);
+// Twitch gives each chatter the colour they picked. Anyone who never picked one
+// gets one of Twitch's 15 default colours, chosen from their user ID.
+const TWITCH_DEFAULT_COLORS = [
+    "#FF0000", "#0000FF", "#00FF00", "#B22222", "#FF7F50", "#9ACD32", "#FF4500", "#2E8B57",
+    "#DAA520", "#D2691E", "#5F9EA0", "#1E90FF", "#FF69B4", "#8A2BE2", "#00FF7F",
+];
+const CHAT_BG = (getComputedStyle(document.documentElement).getPropertyValue("--ink-2").trim() || "#181740");
+const colorCache = new Map();
+
+function hexToRgb(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return [n >> 16 & 255, n >> 8 & 255, n & 255];
+}
+
+function luminance(rgb) {
+    const [r, g, b] = rgb.map(v => {
+        const c = v / 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrast(a, b) {
+    const hi = Math.max(luminance(a), luminance(b));
+    const lo = Math.min(luminance(a), luminance(b));
+    return (hi + 0.05) / (lo + 0.05);
+}
+
+function rgbToHsl([r, g, b]) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    if (max === min) return [0, 0, l];
+    const d = max - min;
+    const sat = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    let h;
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    return [h / 6, sat, l];
+}
+
+function hslToRgb([h, sat, l]) {
+    if (sat === 0) return [l, l, l].map(v => Math.round(v * 255));
+    const q = l < 0.5 ? l * (1 + sat) : l + sat - l * sat;
+    const p = 2 * l - q;
+    const channel = t => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+    };
+    return [channel(h + 1 / 3), channel(h), channel(h - 1 / 3)].map(v => Math.round(v * 255));
+}
+
+// Twitch's dark theme lightens colours that would be hard to read (a pure blue
+// name is shown as a lighter blue). Same idea here, keeping the hue.
+function readable(hex) {
+    const bg = hexToRgb(CHAT_BG);
+    let rgb = hexToRgb(hex);
+    if (contrast(rgb, bg) >= 4.5) return hex;
+    const [h, sat, l] = rgbToHsl(rgb);
+    for (let light = l; light <= 1; light += 0.02) {
+        rgb = hslToRgb([h, sat, Math.min(1, light)]);
+        if (contrast(rgb, bg) >= 4.5) break;
     }
-    return colors[Math.abs(hash) % colors.length];
+    return "rgb(" + rgb.join(",") + ")";
+}
+
+function usernameColor(message) {
+    let base = /^#[0-9a-f]{6}$/i.test(message.color || "") ? message.color : "";
+    if (!base) {
+        const id = parseInt(message.user_id, 10);
+        let index;
+        if (Number.isFinite(id)) {
+            index = id % TWITCH_DEFAULT_COLORS.length;
+        } else {
+            const name = String(message.username || "");
+            index = name ? (name.charCodeAt(0) + name.charCodeAt(name.length - 1)) % TWITCH_DEFAULT_COLORS.length : 0;
+        }
+        base = TWITCH_DEFAULT_COLORS[index];
+    }
+    let color = colorCache.get(base);
+    if (!color) {
+        color = readable(base);
+        colorCache.set(base, color);
+    }
+    return color;
 }
 
 function renderMessageContent(container, message) {
@@ -1448,10 +1531,10 @@ function renderMessageContent(container, message) {
 }
 
 function buildChatRow(message) {
-    const row = el("div", "chat-message");
+    const row = el("div", "chat-message" + (message.first ? " first-time" : ""));
 
     const user = el("span", "chat-user", message.display_name || message.username || "Unknown");
-    user.style.color = usernameColor(message.username || "");
+    user.style.color = usernameColor(message);
 
     const badges = el("span", "chat-badges");
     for (const badge of message.badges || []) {
@@ -1470,8 +1553,12 @@ function buildChatRow(message) {
     const content = el("span", "chat-content");
     renderMessageContent(content, String(message.text || "").replace(/\r?\n/g, ""));
 
-    if (badges.children.length) row.append(user, badges, content);
-    else row.append(user, content);
+    if (message.first) {
+        row.appendChild(el("span", "chat-first", "First time chatter"));
+    }
+    // Badges come first, then the name, like on Twitch.
+    if (badges.children.length) row.append(badges);
+    row.append(user, content);
     return row;
 }
 
@@ -2036,8 +2123,7 @@ function renderSetup() {
     const text = $("connectText");
 
     if (c.connected && !c.needs_reconnect) {
-        text.textContent = "Connected" + (c.account ? " as " + c.account : "") + ". Clips are made through this account." +
-            (c.can_download ? "" : " To save clips as video files, connect again and approve the extra permission.");
+        text.textContent = "Connected" + (c.account ? " as " + c.account : "") + ". Clips are made through this account.";
         connect.textContent = "Connect a different account";
         connect.className = "btn";
         disconnect.hidden = false;
@@ -2054,8 +2140,9 @@ function renderSetup() {
     }
 
     $("saveNote").textContent =
-        "Saving clips as video files is a Twitch rule: it only works if the account is " +
-        ((s && s.channel) || "the channel owner") + " or one of their channel editors.";
+        "Save downloads the clip to your computer. Twitch only gives its own download link to " +
+        ((s && s.channel) || "the channel owner") + " and their channel editors, so for any other account the server " +
+        "finds the video file the way the Twitch website does. That isn't an official Twitch feature, so it could stop working if Twitch changes its site.";
 
     $("st4").hidden = !(c.connected && !c.needs_reconnect);
 }

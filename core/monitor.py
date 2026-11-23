@@ -1,8 +1,12 @@
 
 import os
+import re
 import time
 from collections import deque
 from datetime import datetime, timezone
+
+
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 def env_int(name: str, default: int) -> int:
@@ -117,6 +121,8 @@ class Monitor:
         username = message.get("username", "viewer")
         display_name = message.get("display_name", username)
         message_text = message.get("text", "")
+        color = str(message.get("color") or "")
+        user_id = str(message.get("user_id") or "")
 
         self.total_chatters.add(username.lower())
         self.last_message_at = datetime.now(timezone.utc).isoformat()
@@ -130,6 +136,9 @@ class Monitor:
             "text": message_text,
             "time": self.last_message_at,
             "badges": [],
+            "color": color if _HEX_COLOR.match(color) else "",
+            "user_id": user_id if user_id.isdigit() else "",
+            "first": bool(message.get("first_msg")),
         }
 
         badges_tag = message.get("badges", "")

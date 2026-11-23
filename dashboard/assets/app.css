@@ -593,6 +593,34 @@ button.chip:hover { filter: brightness(1.25); }
 .chat-user::after { content: ""; }
 .chat-content { color: #dcd9fb; }
 
+/* A person's first ever message in this channel */
+.chat-message.first-time {
+    margin: 4px 0;
+    padding: 6px 10px 6px 12px;
+    border-left: 3px solid var(--lav);
+    border-radius: 0 10px 10px 0;
+    background: linear-gradient(90deg, rgba(169, 149, 255, 0.16), rgba(169, 149, 255, 0.04));
+}
+.chat-first {
+    display: block;
+    margin-bottom: 1px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--lav);
+}
+.chat-first::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: var(--lav);
+    box-shadow: 0 0 0 3px rgba(169, 149, 255, 0.25);
+    vertical-align: 1px;
+}
+
 /* Twitch badges next to the username */
 .chat-badges {
     display: inline-flex;

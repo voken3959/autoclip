@@ -12,10 +12,13 @@ Clip creation runs in the background so it never stalls the live dashboard.
 """
 
 import asyncio
+import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -24,6 +27,51 @@ from core.twitch_auth import AuthError, TwitchAuth
 log = logging.getLogger(__name__)
 
 API = "https://api.twitch.tv/helix"
+
+# Twitch's own download link (Get Clips Download) only works for the channel
+# owner and their editors. For everyone else, saving falls back to what the
+# Twitch website itself does to play a clip: ask its public GraphQL server for
+# the clip's video files. This is not an official API, so Twitch can change it.
+# These are the web player's public client ID and saved query (the same ones the
+# yt-dlp downloader uses).
+WEB_GQL_URL = "https://gql.twitch.tv/gql"
+WEB_CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
+WEB_CLIP_QUERY = "2db6a3b20eabf510bd3cf465ae2408834b59eb6b8af89ca73ab1486cacecfb63"
+_CLIP_SLUG = re.compile(r"^[A-Za-z0-9_-]{4,100}$")
+
+
+def _direct_video_url(page_url: str) -> tuple[str, dict]:
+    """Last resort: finds a clip's video file with yt-dlp (if it is installed).
+
+    yt-dlp is kept up to date by its authors when Twitch changes its site, so a
+    redeploy (which installs the newest version) often fixes a broken Save.
+    """
+    import yt_dlp
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+        "format": "best[ext=mp4]/best",
+        "socket_timeout": 15,
+    }
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(page_url, download=False)
+
+    url = info.get("url")
+    headers = info.get("http_headers") or {}
+    if not url:
+        files = [
+            f for f in (info.get("formats") or [])
+            if f.get("url") and f.get("vcodec") != "none" and f.get("acodec") != "none"
+        ]
+        if files:
+            best = max(files, key=lambda f: f.get("height") or 0)
+            url, headers = best["url"], best.get("http_headers") or headers
+    if not url or not str(url).startswith("https://"):
+        raise ValueError("no video file found")
+    return str(url), dict(headers)
 
 
 class ClipError(Exception):
@@ -74,6 +122,11 @@ class ClipManager:
         # 5 seconds after the request and covers `duration` seconds.
         self.delay_after_peak = _env_float("CLIP_DELAY_AFTER_PEAK_SECONDS", 5, 0, 30)
         self.max_peak_wait = 45.0   # never wait longer than this for a spike to peak
+
+        # Save: when Twitch won't give this account a download link, find the
+        # video file the way the Twitch website does. Set to false to turn off.
+        self.fallback_download = os.getenv("CLIP_FALLBACK_DOWNLOAD", "true").strip().lower() != "false"
+        self._official_denied: set[tuple[str, str]] = set()
 
         self.last_error: str | None = None
         self._looked_up_id = ""
@@ -338,17 +391,118 @@ class ClipManager:
                 return clip
         return None
 
-    async def download_url(self, uid: str) -> tuple[str, str]:
-        """A temporary link to the clip's video file, and a file name for it.
+    def _clip_filename(self, clip: dict) -> str:
+        safe_id = "".join(ch for ch in str(clip["clip_id"]) if ch.isalnum() or ch in "-_")[:80]
+        return f"{self.channel or 'clip'}-{safe_id}.mp4"
 
-        Twitch only hands these out to the channel owner and their editors, using
-        a login that was approved with the editor:manage:clips permission.
+    async def download_url(self, uid: str) -> tuple[str, str, dict]:
+        """A link to the clip's video file, a file name for it, and extra request headers.
+
+        Twitch's own download link is tried first, but it only exists for the
+        channel owner and their editors. For anyone else (or if it fails) the
+        file is found the way the Twitch website does it, so Save works for any
+        clip. CLIP_FALLBACK_DOWNLOAD=false turns that backup off.
         """
         clip = self.find(uid)
         if not clip:
             raise ClipError("That clip isn't in the list any more.", 404)
         if clip["status"] != "ready" or not clip.get("clip_id"):
             raise ClipError("The clip isn't ready yet. Try again when it says Ready.")
+        name = self._clip_filename(clip)
+
+        official = ""
+        try:
+            return await self._official_download(clip), name, {}
+        except (ClipError, AuthError) as exc:
+            official = str(exc)
+        except httpx.HTTPError:
+            official = "Couldn't reach Twitch."
+
+        if not self.fallback_download:
+            raise ClipError(official or "Twitch wouldn't give a download link for this clip.")
+
+        problems = []
+        for label, finder in (("website", self._web_download), ("yt-dlp", self._ytdlp_download)):
+            try:
+                url, headers = await finder(clip)
+                log.info("Clip %s: video file found through %s", clip["clip_id"], label)
+                return url, name, headers
+            except ClipError as exc:
+                problems.append(str(exc))
+
+        raise ClipError(
+            "Couldn't get the video file. " + " ".join(dict.fromkeys(problems))
+            + " The clip is still on Twitch, so you can open it with the link and download it there."
+        )
+
+    async def _web_download(self, clip: dict) -> tuple[str, dict]:
+        slug = str(clip.get("clip_id") or "")
+        if not _CLIP_SLUG.match(slug):
+            raise ClipError("This clip has an unusual ID.")
+
+        operations = [{
+            "operationName": "ShareClipRenderStatus",
+            "variables": {"slug": slug},
+            "extensions": {"persistedQuery": {"version": 1, "sha256Hash": WEB_CLIP_QUERY}},
+        }]
+        try:
+            response = await self.http.post(
+                WEB_GQL_URL,
+                content=json.dumps(operations),
+                headers={"Client-ID": WEB_CLIENT_ID, "Content-Type": "text/plain;charset=UTF-8"},
+            )
+        except httpx.HTTPError:
+            raise ClipError("Couldn't reach Twitch's website servers.")
+        if response.status_code != 200:
+            raise ClipError(f"Twitch's website servers answered with error {response.status_code}.")
+
+        try:
+            result = response.json()[0]
+            clip_data = (result.get("data") or {}).get("clip")
+        except (ValueError, IndexError, KeyError, AttributeError, TypeError):
+            raise ClipError("Twitch's website servers sent something unexpected.")
+        if not clip_data:
+            if result.get("errors"):
+                raise ClipError("Twitch has changed its website, so this way of saving needs an update.")
+            raise ClipError("Twitch doesn't have this clip any more.")
+
+        access = clip_data.get("playbackAccessToken") or {}
+        signature, token = access.get("signature"), access.get("value")
+        assets = [a for a in (clip_data.get("assets") or []) if isinstance(a, dict)]
+        qualities = (assets[0].get("videoQualities") if assets else None) or clip_data.get("videoQualities") or []
+        sources = [
+            q for q in qualities
+            if isinstance(q, dict) and str(q.get("sourceURL") or "").startswith("https://")
+        ]
+        if not (signature and token and sources):
+            raise ClipError("Twitch hasn't published a video file for this clip yet.")
+
+        def height(quality: dict) -> int:
+            try:
+                return int(float(quality.get("quality") or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        best = max(sources, key=height)
+        parts = urlsplit(best["sourceURL"])
+        query = dict(parse_qsl(parts.query))
+        query.update({"sig": signature, "token": token})
+        return urlunsplit(parts._replace(query=urlencode(query))), {}
+
+    async def _ytdlp_download(self, clip: dict) -> tuple[str, dict]:
+        page = clip.get("url") or f"https://clips.twitch.tv/{clip['clip_id']}"
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_direct_video_url, page), timeout=40)
+        except asyncio.TimeoutError:
+            raise ClipError("The backup downloader took too long.")
+        except ImportError:
+            raise ClipError("The backup downloader (yt-dlp) isn't installed on the server.")
+        except Exception as exc:
+            log.warning("yt-dlp couldn't find the clip: %s: %s", exc.__class__.__name__, str(exc)[:200])
+            raise ClipError("The backup downloader couldn't find the video file.")
+
+    async def _official_download(self, clip: dict) -> str:
+        """Twitch's own download link (channel owner and editors only)."""
         problem = self.auth.problem()
         if problem:
             raise ClipError(problem)
@@ -359,6 +513,10 @@ class ClipManager:
         broadcaster = await self._broadcaster_id(token)
         if not self.auth.user_id:
             raise ClipError("Twitch hasn't confirmed which account is connected yet. Try again in a moment.")
+
+        denied_key = (str(broadcaster), str(self.auth.user_id))
+        if denied_key in self._official_denied:
+            raise ClipError("Twitch only gives download links to the channel owner and their editors.")
 
         params = {
             "editor_id": self.auth.user_id,
@@ -376,6 +534,7 @@ class ClipManager:
         if code == 401:
             raise ClipError("Twitch rejected the login. Connect your Twitch account again.")
         if code == 403:
+            self._official_denied.add(denied_key)
             raise ClipError(
                 f"Twitch only lets {self.channel or 'the channel owner'} and their channel editors save clips. "
                 "The connected account isn't one of them."
@@ -393,6 +552,4 @@ class ClipManager:
         if not url.startswith("https://"):
             raise ClipError("Twitch hasn't made a video file for this clip yet. Try again in a minute.")
 
-        safe_id = "".join(ch for ch in str(clip["clip_id"]) if ch.isalnum() or ch in "-_")[:80]
-        name = f"{self.channel or 'clip'}-{safe_id}.mp4"
-        return url, name
+        return url

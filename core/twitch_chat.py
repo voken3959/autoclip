@@ -128,6 +128,11 @@ class TwitchChatClient:
             "emotes": tags.get("emotes", ""),
             "badges": tags.get("badges", ""),
             "room_id": tags.get("room-id", ""),
+            # The username colour the person picked on Twitch (empty if they never did).
+            "color": tags.get("color", ""),
+            "user_id": tags.get("user-id", ""),
+            # Twitch marks a person's very first message in this channel.
+            "first_msg": tags.get("first-msg", "") == "1",
         }
 
     async def close(self):

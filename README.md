@@ -97,10 +97,13 @@ about 5 seconds after it is made, so the peak sits in the middle of a 30 second 
 
 Each clip goes through Waiting (auto-clips only), Starting, Saving, then Ready (or
 Failed with the reason). Ready clips have a **Save** button that downloads the video
-file from the dashboard. Twitch only allows that for the channel owner and the
-channel's editors, so it works when the connected account is one of them. The sign-in
-asks for the extra `editor:manage:clips` permission for this; connect again if you
-connected before it existed.
+file to your computer. Twitch's own download link only exists for the channel owner
+and their editors (it needs the `editor:manage:clips` permission). For any other
+account, the server finds the video file the way the Twitch website does, so Save
+works for any channel's clips. That backup is not an official Twitch feature and can
+stop working if Twitch changes its site; `yt-dlp` (in `requirements.txt`) is a second
+backup, and redeploying installs its newest version. Set `CLIP_FALLBACK_DOWNLOAD=false`
+to use only Twitch's official link.
 Twitch only makes clips while the channel is live, and the streamer's clip
 restrictions apply. A clip is only listed as Ready once Twitch has really published it.
 
